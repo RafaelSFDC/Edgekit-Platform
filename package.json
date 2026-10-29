@@ -1,0 +1,50 @@
+{
+  "name": "edgekit-platform",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Serverless, open-source Backend-as-a-Service on Cloudflare Workers, D1, R2, and Durable Objects - Edgekit Platform",
+  "scripts": {
+    "dev": "concurrently -n \"api,web\" -c \"magenta,cyan\" \"pnpm --filter @edgekit/platform-api dev\" \"pnpm --filter @edgekit/platform-web dev\"",
+    "dev:api": "pnpm --filter @edgekit/platform-api dev",
+    "dev:web": "pnpm --filter @edgekit/platform-web dev",
+    "setup": "tsx scripts/setup.ts",
+    "setup:local": "tsx scripts/setup.ts --local",
+    "keys:generate": "tsx scripts/generate-keys.ts",
+    "db:generate": "drizzle-kit generate && tsx scripts/bundle-d1-migrations.ts",
+    "db:migrate:prod": "tsx scripts/migrate-d1-prod.ts",
+    "db:migrate:prod:list": "tsx scripts/migrate-d1-prod.ts --list",
+    "db:studio": "drizzle-kit studio",
+    "build:web": "pnpm --filter @edgekit/platform-web build",
+    "build:api": "pnpm --filter @edgekit/platform-api build",
+    "build": "pnpm --filter @edgekit/platform-web build && pnpm --filter @edgekit/platform-api build",
+    "deploy": "pnpm --filter @edgekit/platform-web build && pnpm --filter @edgekit/platform-api deploy",
+    "cf-typegen": "pnpm --filter @edgekit/platform-api cf-typegen",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "test:api": "pnpm --filter @edgekit/platform-api test",
+    "test:web": "pnpm --filter @edgekit/platform-web test"
+  },
+  "keywords": [
+    "edgekit",
+    "cloudflare",
+    "workers",
+    "d1",
+    "r2",
+    "durable-objects",
+    "websockets",
+    "hono",
+    "serverless",
+    "baas",
+    "supabase"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "dotenv": "^17.3.1",
+    "drizzle-kit": "^0.31.10",
+    "tsx": "^4.21.0",
+    "typescript": "^5.8.2"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "@edgekit/platform-client",
+  "version": "1.0.0",
+  "description": "Official TypeScript SDK for Edgekit Platform on Cloudflare Workers",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "keywords": ["edgekit", "cloudflare", "baas", "supabase", "hono"]
+}
