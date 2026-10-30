@@ -3,7 +3,7 @@ import { count, eq, sql } from 'drizzle-orm'
 import { nanoid } from 'nanoid'
 import type { AppEnv } from '../types'
 import { getDb } from '../db'
-import { apiKeys, storageFiles, users } from '../db/schema'
+import { apiKeys, storageFiles, users, tablePolicies, sessions, accounts } from '../db/schema'
 import { getBindings } from '../env'
 import { getPlanCapabilities } from '../plan'
 import { requireAdmin } from '../auth/middleware'
@@ -162,6 +162,7 @@ const SYSTEM_TABLES_SET = new Set([
   'audit_logs',
   'webhooks',
   'app_settings',
+  'table_policies',
   '__honobase_migrations',
   '__d1_migrations',
   'drizzle_migrations',
@@ -401,3 +402,136 @@ adminRoutes.post('/keys', requireAdmin(), async (c) => {
   await db.insert(apiKeys).values(record)
   return c.json({ success: true, data: record }, 201)
 })
+
+// Obter política de acesso da tabela
+adminRoutes.get('/tables/:name/policy', requireAdmin(), async (c) => {
+  const tableName = c.req.param('name').trim()
+  const db = await getDb()
+  const policy = await db
+    .select()
+    .from(tablePolicies)
+    .where(eq(tablePolicies.tableName, tableName))
+    .get()
+
+  return c.json({
+    success: true,
+    data: policy || {
+      tableName,
+      readLevel: 'public',
+      writeLevel: 'authenticated',
+    },
+  })
+})
+
+// Atualizar política de acesso da tabela
+adminRoutes.put('/tables/:name/policy', requireAdmin(), async (c) => {
+  const tableName = c.req.param('name').trim()
+  const body = await c.req.json()
+  const readLevel = ['public', 'authenticated', 'admin'].includes(body.readLevel)
+    ? body.readLevel
+    : 'public'
+  const writeLevel = ['public', 'authenticated', 'admin'].includes(body.writeLevel)
+    ? body.writeLevel
+    : 'authenticated'
+  const now = new Date()
+  const db = await getDb()
+
+  const existing = await db
+    .select()
+    .from(tablePolicies)
+    .where(eq(tablePolicies.tableName, tableName))
+    .get()
+
+  if (existing) {
+    await db
+      .update(tablePolicies)
+      .set({ readLevel, writeLevel, updatedAt: now })
+      .where(eq(tablePolicies.tableName, tableName))
+  } else {
+    await db.insert(tablePolicies).values({
+      id: nanoid(),
+      tableName,
+      readLevel,
+      writeLevel,
+      createdAt: now,
+      updatedAt: now,
+    })
+  }
+
+  return c.json({
+    success: true,
+    data: { tableName, readLevel, writeLevel },
+  })
+})
+
+// Criar usuário pelo painel administrativo
+adminRoutes.post('/users', requireAdmin(), async (c) => {
+  const body = await c.req.json()
+  const { name, email, password, role } = body
+
+  if (!name || !email || !password) {
+    return c.json(
+      { success: false, error: { message: 'Nome, e-mail e senha são obrigatórios.' } },
+      400,
+    )
+  }
+
+  const db = await getDb()
+  const existing = await db.select().from(users).where(eq(users.email, email)).get()
+  if (existing) {
+    return c.json(
+      { success: false, error: { message: 'Já existe um usuário cadastrado com este e-mail.' } },
+      400,
+    )
+  }
+
+  try {
+    const auth = await getAuth()
+    const userRes = await auth.api.signUpEmail({
+      body: { name, email, password },
+    })
+
+    const assignedRole = role === 'admin' ? 'admin' : 'user'
+    if (assignedRole === 'admin') {
+      await db.update(users).set({ role: 'admin' }).where(eq(users.email, email))
+    }
+
+    return c.json(
+      {
+        success: true,
+        message: 'Usuário criado com sucesso!',
+        data: { ...userRes.user, role: assignedRole },
+      },
+      201,
+    )
+  } catch (err: any) {
+    return c.json(
+      { success: false, error: { message: err.message || 'Falha ao criar usuário.' } },
+      500,
+    )
+  }
+})
+
+// Atualizar função (role) de um usuário
+adminRoutes.patch('/users/:id/role', requireAdmin(), async (c) => {
+  const id = c.req.param('id')
+  const body = await c.req.json()
+  const role = body.role === 'admin' ? 'admin' : 'user'
+  const db = await getDb()
+
+  await db.update(users).set({ role, updatedAt: new Date() }).where(eq(users.id, id))
+  return c.json({ success: true, message: `Função do usuário atualizada para ${role}.` })
+})
+
+// Excluir usuário pelo painel administrativo
+adminRoutes.delete('/users/:id', requireAdmin(), async (c) => {
+  const id = c.req.param('id')
+  const db = await getDb()
+
+  await db.delete(sessions).where(eq(sessions.userId, id)).catch(() => {})
+  await db.delete(accounts).where(eq(accounts.userId, id)).catch(() => {})
+  await db.delete(users).where(eq(users.id, id))
+
+  return c.json({ success: true, message: 'Usuário removido com sucesso.' })
+})
+

@@ -10,12 +10,17 @@ import {
   Shield,
   X,
   Layers,
+  Pencil,
+  Search,
 } from 'lucide-react';
 import { useI18n } from '../i18n/context';
 import {
   useTablesQuery,
   useTableRowsQuery,
   useDeleteTableRowMutation,
+  useUpdateTableRowMutation,
+  useTablePolicyQuery,
+  useUpdateTablePolicyMutation,
   useRunSqlMutation,
   useInsertTableRowMutation,
   useCreateTableMutation,
@@ -53,6 +58,7 @@ const SYSTEM_TABLES = new Set([
   'audit_logs',
   'webhooks',
   'app_settings',
+  'table_policies',
   '__honobase_migrations',
   '__d1_migrations',
   'drizzle_migrations',
@@ -72,10 +78,14 @@ export const DatabasePage: React.FC = () => {
 
   // Mutations
   const deleteRowMutation = useDeleteTableRowMutation();
+  const updateRowMutation = useUpdateTableRowMutation();
   const runSqlMutation = useRunSqlMutation();
   const insertRowMutation = useInsertTableRowMutation();
   const createTableMutation = useCreateTableMutation();
   const dropTableMutation = useDropTableMutation();
+
+  const { data: tablePolicy } = useTablePolicyQuery(currentTable);
+  const updatePolicyMutation = useUpdateTablePolicyMutation();
 
   // SQL Runner state
   const [sqlQuery, setSqlQuery] = useState('SELECT * FROM users LIMIT 10;');
@@ -86,6 +96,12 @@ export const DatabasePage: React.FC = () => {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [newRowJson, setNewRowJson] = useState('{\n  "name": "Novo Item",\n  "active": true\n}');
+
+  // Edit Row State
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editRowJson, setEditRowJson] = useState('{}');
+  const [searchTerm, setSearchTerm] = useState('');
 
   // Create Table State
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -138,6 +154,24 @@ export const DatabasePage: React.FC = () => {
       setIsAddOpen(false);
     } catch (err: any) {
       toast.error(err.message || 'JSON inválido');
+    }
+  };
+
+  const handleUpdateRow = async () => {
+    if (!currentTable || !editingId) return;
+    try {
+      const parsed = JSON.parse(editRowJson);
+      const { id: _id, ...updates } = parsed;
+      await updateRowMutation.mutateAsync({
+        table: currentTable,
+        id: editingId,
+        record: updates,
+      });
+      toast.success('Registro atualizado com sucesso!');
+      setIsEditOpen(false);
+      setEditingId(null);
+    } catch (err: any) {
+      toast.error(err.message || 'JSON inválido ou erro ao atualizar registro.');
     }
   };
 
@@ -304,22 +338,76 @@ export const DatabasePage: React.FC = () => {
 
           {/* Área de Dados da Tabela */}
           <Card className="md:col-span-3 h-[calc(100vh-220px)] flex flex-col">
-            <CardHeader className="p-3 border-b border-border flex flex-row items-center justify-between space-y-0">
-              <div className="flex items-center gap-2">
+            <CardHeader className="p-3 border-b border-border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 space-y-0">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm font-semibold text-foreground">
                   {currentTable || 'Selecione uma tabela'}
                 </span>
                 <Badge variant="outline" className="text-xs font-mono">
                   {rows.length} {t.database.rowsCount}
                 </Badge>
-                {isCurrentSystemTable && (
+                {isCurrentSystemTable ? (
                   <Badge variant="outline" className="text-[10px] text-muted-foreground gap-1">
                     <Shield className="size-2.5" />
-                    Protegida
+                    Protegida (Admin)
                   </Badge>
-                )}
+                ) : currentTable ? (
+                  <div className="flex items-center gap-1.5 text-xs bg-muted/40 p-1 rounded-md border border-border/60">
+                    <span className="text-[10px] uppercase font-semibold text-muted-foreground">Acesso:</span>
+                    <select
+                      value={tablePolicy?.readLevel || 'public'}
+                      onChange={async (e) => {
+                        const newRead = e.target.value;
+                        await updatePolicyMutation.mutateAsync({
+                          table: currentTable,
+                          policy: {
+                            readLevel: newRead,
+                            writeLevel: tablePolicy?.writeLevel || 'authenticated',
+                          },
+                        });
+                        toast.success('Política de leitura atualizada!');
+                      }}
+                      className="bg-background text-[11px] font-mono border border-border rounded px-1.5 py-0.5 cursor-pointer text-foreground"
+                    >
+                      <option value="public">Leitura: Pública</option>
+                      <option value="authenticated">Leitura: Autenticada</option>
+                      <option value="admin">Leitura: Admin Only</option>
+                    </select>
+                    <select
+                      value={tablePolicy?.writeLevel || 'authenticated'}
+                      onChange={async (e) => {
+                        const newWrite = e.target.value;
+                        await updatePolicyMutation.mutateAsync({
+                          table: currentTable,
+                          policy: {
+                            readLevel: tablePolicy?.readLevel || 'public',
+                            writeLevel: newWrite,
+                          },
+                        });
+                        toast.success('Política de escrita atualizada!');
+                      }}
+                      className="bg-background text-[11px] font-mono border border-border rounded px-1.5 py-0.5 cursor-pointer text-foreground"
+                    >
+                      <option value="public">Escrita: Pública</option>
+                      <option value="authenticated">Escrita: Autenticada</option>
+                      <option value="admin">Escrita: Admin Only</option>
+                    </select>
+                  </div>
+                ) : null}
               </div>
-              <div className="flex items-center gap-2">
+
+              <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
+                <div className="relative">
+                  <Search className="size-3.5 absolute left-2 top-2 text-muted-foreground" />
+                  <input
+                    type="text"
+                    placeholder="Filtrar dados..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="pl-7 pr-2 py-1 text-xs bg-muted/60 border border-border rounded-md text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-primary w-28 sm:w-36"
+                  />
+                </div>
+
                 {!isCurrentSystemTable && currentTable && (
                   <Button
                     variant="ghost"
@@ -329,7 +417,7 @@ export const DatabasePage: React.FC = () => {
                     title="Excluir esta tabela"
                   >
                     <Trash2 className="size-3" />
-                    <span>Excluir Tabela</span>
+                    <span className="hidden sm:inline">Excluir</span>
                   </Button>
                 )}
                 <Button
@@ -339,7 +427,7 @@ export const DatabasePage: React.FC = () => {
                   className="gap-1.5 text-xs h-7 cursor-pointer"
                 >
                   <Plus className="size-3.5" />
-                  Inserir Registro
+                  <span>Novo</span>
                 </Button>
                 <Button
                   variant="ghost"
@@ -371,11 +459,18 @@ export const DatabasePage: React.FC = () => {
                           {col}
                         </th>
                       ))}
-                      <th className="p-2.5 w-16 text-right">Ações</th>
+                      <th className="p-2.5 w-20 text-right">Ações</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map((row, idx) => (
+                    {(searchTerm
+                      ? rows.filter((r) =>
+                          Object.values(r).some((val) =>
+                            String(val ?? '').toLowerCase().includes(searchTerm.toLowerCase())
+                          )
+                        )
+                      : rows
+                    ).map((row, idx) => (
                       <tr key={idx} className="border-b border-border/50 hover:bg-muted/40 transition-colors">
                         {columns.map((col) => (
                           <td key={col} className="p-2.5 font-mono text-[11px] truncate max-w-xs">
@@ -386,15 +481,30 @@ export const DatabasePage: React.FC = () => {
                         ))}
                         <td className="p-2.5 text-right">
                           {row.id ? (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="size-6 text-destructive hover:bg-destructive/10 cursor-pointer"
-                              onClick={() => setDeletingId(String(row.id))}
-                              title={t.common.delete}
-                            >
-                              <Trash2 className="size-3" />
-                            </Button>
+                            <div className="flex items-center justify-end gap-1">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="size-6 text-muted-foreground hover:text-foreground cursor-pointer"
+                                onClick={() => {
+                                  setEditingId(String(row.id));
+                                  setEditRowJson(JSON.stringify(row, null, 2));
+                                  setIsEditOpen(true);
+                                }}
+                                title="Editar Registro"
+                              >
+                                <Pencil className="size-3" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="size-6 text-destructive hover:bg-destructive/10 cursor-pointer"
+                                onClick={() => setDeletingId(String(row.id))}
+                                title={t.common.delete}
+                              >
+                                <Trash2 className="size-3" />
+                              </Button>
+                            </div>
                           ) : null}
                         </td>
                       </tr>
@@ -421,7 +531,7 @@ export const DatabasePage: React.FC = () => {
                 className="gap-1.5 text-xs h-8 cursor-pointer"
               >
                 <Play className="size-3.5 fill-current" />
-                {runSqlMutation.isPending ? t.common.loading : t.database.runQuery}
+                {runSqlMutation.isPending ? t.common.loading : t.database.runSql}
               </Button>
             </CardHeader>
             <CardContent className="p-4 pt-2 space-y-3">
@@ -688,6 +798,38 @@ export const DatabasePage: React.FC = () => {
               disabled={insertRowMutation.isPending}
             >
               {insertRowMutation.isPending ? t.common.loading : t.common.save}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal de Edição de Registro */}
+      <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle className="text-base">Editar Registro em "{currentTable}"</DialogTitle>
+            <DialogDescription className="text-xs">
+              Atualize os campos do registro no formato JSON válido.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            <textarea
+              rows={8}
+              value={editRowJson}
+              onChange={(e) => setEditRowJson(e.target.value)}
+              className="w-full bg-muted/50 border border-border rounded-lg p-3 text-xs font-mono text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
+            />
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="ghost" size="sm" onClick={() => setIsEditOpen(false)}>
+              {t.common.cancel}
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleUpdateRow}
+              disabled={updateRowMutation.isPending}
+            >
+              {updateRowMutation.isPending ? t.common.loading : t.common.save}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -22,7 +22,7 @@ app.use(
     origin: (origin) => origin || '*',
     allowHeaders: ['Content-Type', 'Authorization', 'apikey', 'x-api-key', 'X-Requested-With'],
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    exposeHeaders: ['Content-Length', 'X-HonoBase-Version'],
+    exposeHeaders: ['Content-Length', 'X-Edgekit-Version', 'X-HonoBase-Version'],
     credentials: true,
   }),
 )
@@ -34,16 +34,16 @@ app.use('/api/*', authContextMiddleware())
 app.get('/health', (c) =>
   c.json({
     status: 'ok',
-    service: 'HonoBase Serverless Backend',
-    version: '0.1.0',
+    service: 'Edgekit Platform Serverless Backend',
+    version: '1.0.0',
     timestamp: new Date().toISOString(),
   }),
 )
 app.get('/api/v1/health', (c) =>
   c.json({
     status: 'ok',
-    service: 'HonoBase Serverless Backend',
-    version: '0.1.0',
+    service: 'Edgekit Platform Serverless Backend',
+    version: '1.0.0',
     timestamp: new Date().toISOString(),
   }),
 )
@@ -53,8 +53,8 @@ app.get('/openapi.json', (c) => {
   return c.json({
     openapi: '3.1.0',
     info: {
-      title: 'HonoBase - Cloudflare Serverless Backend API',
-      version: '0.1.0',
+      title: 'Edgekit Platform - Cloudflare Serverless Backend API',
+      version: '1.0.0',
       description:
         'Open-Source Self-Hosted Backend-as-a-Service na Cloudflare com Auth, D1 Database, R2 Storage e Realtime Durable Objects.',
     },
@@ -106,7 +106,7 @@ app.get('/docs', (c) => {
 <!doctype html>
 <html>
   <head>
-    <title>HonoBase API Reference</title>
+    <title>Edgekit Platform API Reference</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f97316' stroke-width='2'><path d='M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6'/></svg>" />
@@ -132,7 +132,7 @@ app.route('/api/v1/admin', adminRoutes)
 
 // 6. Tratamento de Erros Global
 app.onError((err, c) => {
-  console.error('[HonoBase Error]:', err)
+  console.error('[Edgekit Platform Error]:', err)
   return c.json(
     {
       success: false,

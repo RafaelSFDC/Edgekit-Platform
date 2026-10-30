@@ -111,7 +111,7 @@ async function setupCloudflare() {
   }
 
   // 4. Executar Migrações D1 em Produção
-  console.info('🚀 4/5: Aplicando migrações de schema no D1 remoto...')
+  console.info('🚀 4/6: Aplicando migrações de schema no D1 remoto...')
   const migrateResult = runCommand('pnpm', [
     'exec',
     'tsx',
@@ -124,14 +124,61 @@ async function setupCloudflare() {
     console.warn('⚠️  Aviso de migração: ' + migrateResult.stderr)
   }
 
-  // 5. Conclusão e Instruções de Deploy
+  // 5. Configurar Segredos no Worker Remoto
+  console.info('🔐 5/6: Sincronizando segredos de autenticação na Cloudflare...')
+  const envPath = path.join(cwd, '.env')
+  let serviceRoleKey = ''
+  let anonKey = ''
+  let authSecret = ''
+
+  if (fs.existsSync(envPath)) {
+    const envContent = fs.readFileSync(envPath, 'utf8')
+    const matchService = envContent.match(/EDGEKIT_SERVICE_ROLE_KEY=(.*)/)
+    const matchAnon = envContent.match(/EDGEKIT_ANON_KEY=(.*)/)
+    const matchAuth = envContent.match(/BETTER_AUTH_SECRET=(.*)/)
+
+    if (matchService && matchService[1]) serviceRoleKey = matchService[1].trim()
+    if (matchAnon && matchAnon[1]) anonKey = matchAnon[1].trim()
+    if (matchAuth && matchAuth[1]) authSecret = matchAuth[1].trim()
+  }
+
+  function putSecret(name: string, value: string) {
+    const isWindows = process.platform === 'win32'
+    const cmd = isWindows ? 'pnpm.cmd' : 'pnpm'
+    return spawnSync(cmd, ['exec', 'wrangler', 'secret', 'put', name, '--config', 'apps/api/wrangler.jsonc'], {
+      input: value,
+      encoding: 'utf8',
+      shell: isWindows,
+      env: { ...process.env, CI: 'true' },
+    })
+  }
+
+  if (serviceRoleKey) {
+    putSecret('EDGEKIT_SERVICE_ROLE_KEY', serviceRoleKey)
+    putSecret('HONOBASE_SERVICE_ROLE_KEY', serviceRoleKey)
+  }
+  if (anonKey) {
+    putSecret('EDGEKIT_ANON_KEY', anonKey)
+    putSecret('HONOBASE_ANON_KEY', anonKey)
+  }
+  if (authSecret) {
+    putSecret('BETTER_AUTH_SECRET', authSecret)
+  }
+  console.info('✅ Segredos e chaves de segurança sincronizados com sucesso!\n')
+
+  // 6. Conclusão e Instruções de Deploy
   console.info('=================================================================')
-  console.info('🎉 Provisionamento dos Recursos Serverless Concluído!')
+  console.info('🎉 6/6: Provisionamento dos Recursos Serverless Concluído!')
   console.info('=================================================================')
   console.info('Para publicar sua plataforma completa na Cloudflare:')
-  console.info('  👉 pnpm deploy')
-  console.info('\nApós o deploy, acesse o link gerado pelo Wrangler e faça login')
-  console.info('usando sua Chave de Administração (EDGEKIT_SERVICE_ROLE_KEY).\n')
+  console.info('  👉 pnpm deploy\n')
+  console.info('Após o deploy, acesse o link gerado pelo Wrangler e faça login')
+  console.info('usando sua Chave de Administração (EDGEKIT_SERVICE_ROLE_KEY):')
+  if (serviceRoleKey) {
+    console.info(`👉 ${serviceRoleKey}\n`)
+  } else {
+    console.info('👉 Consulte o arquivo .env no seu projeto.\n')
+  }
 }
 
 setupCloudflare().catch((err) => {

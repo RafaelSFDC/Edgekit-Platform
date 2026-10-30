@@ -124,3 +124,16 @@ export const webhooks = sqliteTable('webhooks', {
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })
+
+// =========================================================================
+// 6. TABLE ACCESS POLICIES (Mini-RLS)
+// =========================================================================
+
+export const tablePolicies = sqliteTable('table_policies', {
+  id: text('id').primaryKey(),
+  tableName: text('table_name').notNull().unique(),
+  readLevel: text('read_level').notNull().default('public'), // 'public' | 'authenticated' | 'admin'
+  writeLevel: text('write_level').notNull().default('authenticated'), // 'public' | 'authenticated' | 'admin'
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+})

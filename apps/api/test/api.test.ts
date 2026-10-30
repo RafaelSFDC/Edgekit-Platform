@@ -10,7 +10,7 @@ describe('HonoBase Core & Cloudflare Compatibility', () => {
     expect(res.status).toBe(200)
     const json: any = await res.json()
     expect(json.status).toBe('ok')
-    expect(json.service).toContain('HonoBase')
+    expect(json.service).toMatch(/Edgekit|HonoBase/)
   })
 
   it('GET /openapi.json deve expor a especificação OpenAPI 3.1', async () => {
@@ -18,7 +18,7 @@ describe('HonoBase Core & Cloudflare Compatibility', () => {
     expect(res.status).toBe(200)
     const json: any = await res.json()
     expect(json.openapi).toBe('3.1.0')
-    expect(json.info.title).toContain('HonoBase')
+    expect(json.info.title).toMatch(/Edgekit|HonoBase/)
   })
 
   it('GET /api/v1/auth/public-config deve expor a chave anon e nome do app', async () => {
@@ -26,7 +26,7 @@ describe('HonoBase Core & Cloudflare Compatibility', () => {
     expect(res.status).toBe(200)
     const json: any = await res.json()
     expect(json.success).toBe(true)
-    expect(json.data.appName).toBe('HonoBase')
+    expect(['Edgekit Platform', 'HonoBase']).toContain(json.data.appName)
     expect(json.data.anonKey).toBeDefined()
   })
 

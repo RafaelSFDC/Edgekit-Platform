@@ -216,6 +216,23 @@ export async function insertTableRow(table: string, record: any): Promise<any> {
   return json.data;
 }
 
+export async function updateTableRow(table: string, id: string, record: any): Promise<any> {
+  const res = await fetch(
+    `${API_BASE}/api/v1/db/${encodeURIComponent(table)}/${encodeURIComponent(id)}`,
+    {
+      method: 'PATCH',
+      headers: getHeaders(),
+      body: JSON.stringify(record),
+    }
+  );
+
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao atualizar linha.', res.status);
+  }
+  return json.data;
+}
+
 export async function deleteTableRow(table: string, id: string): Promise<boolean> {
   const res = await fetch(
     `${API_BASE}/api/v1/db/${encodeURIComponent(table)}/${encodeURIComponent(id)}`,
@@ -345,3 +362,81 @@ export async function broadcastRealtime(
   }
   return json;
 }
+
+export async function fetchTablePolicy(
+  table: string
+): Promise<{ tableName: string; readLevel: string; writeLevel: string }> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/tables/${encodeURIComponent(table)}/policy`, {
+    headers: getHeaders(),
+  });
+
+  if (!res.ok) {
+    throw new ApiError('Falha ao obter política da tabela.', res.status);
+  }
+  const json = await res.json();
+  return json.data || { tableName: table, readLevel: 'public', writeLevel: 'authenticated' };
+}
+
+export async function updateTablePolicy(
+  table: string,
+  policy: { readLevel: string; writeLevel: string }
+): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/tables/${encodeURIComponent(table)}/policy`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify(policy),
+  });
+
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao atualizar política da tabela.', res.status);
+  }
+  return json.data;
+}
+
+export async function adminCreateUser(data: {
+  name: string;
+  email: string;
+  password: string;
+  role?: string;
+}): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/users`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao criar usuário.', res.status);
+  }
+  return json.data;
+}
+
+export async function adminUpdateUserRole(id: string, role: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/users/${encodeURIComponent(id)}/role`, {
+    method: 'PATCH',
+    headers: getHeaders(),
+    body: JSON.stringify({ role }),
+  });
+
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao atualizar função do usuário.', res.status);
+  }
+  return json;
+}
+
+export async function adminDeleteUser(id: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/users/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao excluir usuário.', res.status);
+  }
+  return json;
+}
+

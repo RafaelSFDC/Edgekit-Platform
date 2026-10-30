@@ -1,7 +1,8 @@
 import { Hono, type Context } from 'hono'
-import { sql } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import type { AppEnv } from '../types'
-import { getDatabaseRuntime } from '../db'
+import { getDatabaseRuntime, type AppDatabase } from '../db'
+import { tablePolicies, webhooks } from '../db/schema'
 import { requireAuth } from '../auth/middleware'
 import { getBindings } from '../env'
 
@@ -19,6 +20,7 @@ const SYSTEM_TABLES = new Set([
   'audit_logs',
   'webhooks',
   'app_settings',
+  'table_policies',
   '__honobase_migrations',
   '__d1_migrations',
   'drizzle_migrations',
@@ -33,13 +35,76 @@ function sanitizeIdentifier(name: string): string {
   return name
 }
 
-function checkTableAccess(table: string, role?: string): void {
+async function checkTableAccess(
+  db: AppDatabase,
+  table: string,
+  role?: string,
+  action: 'read' | 'write' = 'read',
+): Promise<void> {
   sanitizeIdentifier(table)
-  if (SYSTEM_TABLES.has(table.toLowerCase()) && role !== 'admin') {
-    throw new Error(
-      `Acesso negado: a tabela "${table}" pertence à infraestrutura da plataforma e só pode ser acessada por administradores.`,
-    )
+
+  if (SYSTEM_TABLES.has(table.toLowerCase())) {
+    if (role !== 'admin') {
+      throw new Error(
+        `Acesso negado: a tabela "${table}" pertence à infraestrutura da plataforma e só pode ser acessada por administradores.`,
+      )
+    }
+    return
   }
+
+  // Se for admin (service_role ou usuário admin), tem acesso irrestrito
+  if (role === 'admin') {
+    return
+  }
+
+  // Verifica política de acesso configurada
+  try {
+    const policy = await db
+      .select()
+      .from(tablePolicies)
+      .where(eq(tablePolicies.tableName, table))
+      .get()
+
+    const requiredLevel =
+      action === 'read' ? policy?.readLevel || 'public' : policy?.writeLevel || 'authenticated'
+
+    if (requiredLevel === 'admin' && role !== 'admin') {
+      throw new Error(
+        `Acesso negado: a tabela "${table}" exige privilégios de administrador para ${action === 'read' ? 'leitura' : 'escrita'}.`,
+      )
+    }
+
+    if (requiredLevel === 'authenticated' && (!role || role === 'anon')) {
+      throw new Error(
+        `Acesso restrito: autenticação necessária para ${action === 'read' ? 'leitura' : 'escrita'} na tabela "${table}".`,
+      )
+    }
+  } catch (err: any) {
+    if (err.message?.startsWith('Acesso')) {
+      throw err
+    }
+    // Caso a tabela de políticas ainda não esteja inicializada, segue política padrão segura
+    if (action === 'write' && (!role || role === 'anon')) {
+      throw new Error(
+        `Acesso restrito: autenticação necessária para gravação na tabela "${table}".`,
+      )
+    }
+  }
+}
+
+async function computeHmacSha256(secret: string, message: string): Promise<string> {
+  const enc = new TextEncoder()
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  const signature = await crypto.subtle.sign('HMAC', key, enc.encode(message))
+  return Array.from(new Uint8Array(signature))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
 }
 
 async function broadcastDatabaseEvent(
@@ -50,22 +115,23 @@ async function broadcastDatabaseEvent(
 ) {
   try {
     const bindings = await getBindings()
+    const message = {
+      id: crypto.randomUUID(),
+      channel: `db:${table}`,
+      event,
+      payload: {
+        table,
+        event,
+        data,
+        timestamp: Date.now(),
+      },
+      timestamp: Date.now(),
+    }
+
+    // 1. Emissão para Durable Object WebSocket
     if (bindings.REALTIME) {
       const channel = `db:${table}`
       const stub = bindings.REALTIME.getByName(channel)
-      const message = {
-        id: crypto.randomUUID(),
-        channel,
-        event,
-        payload: {
-          table,
-          event,
-          data,
-          timestamp: Date.now(),
-        },
-        timestamp: Date.now(),
-      }
-
       const broadcastReq = new Request('http://internal/broadcast', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -78,8 +144,77 @@ async function broadcastDatabaseEvent(
         await (stub as any).fetch(broadcastReq)
       }
     }
+
+    // 2. Disparo de Webhooks HTTP em Background (Event Hooks)
+    const runtime = await getDatabaseRuntime()
+    let activeWebhooks: any[] = []
+    try {
+      activeWebhooks = (await runtime.db
+        .select()
+        .from(webhooks)
+        .where(eq(webhooks.enabled, true))
+        .all()) as any[]
+    } catch {
+      activeWebhooks = []
+    }
+
+    if (activeWebhooks.length > 0) {
+      const payloadString = JSON.stringify({
+        id: message.id,
+        event,
+        table,
+        data,
+        timestamp: message.timestamp,
+      })
+
+      const dispatchPromise = Promise.allSettled(
+        activeWebhooks.map(async (wh: any) => {
+          try {
+            let matched = false
+            const parsedEvents: string[] = JSON.parse(wh.events || '["*"]')
+            if (
+              parsedEvents.includes('*') ||
+              parsedEvents.includes(event) ||
+              parsedEvents.includes(`${table}.${event}`) ||
+              parsedEvents.includes(`${table}.*`)
+            ) {
+              matched = true
+            }
+
+            if (!matched) return
+
+            const headers: Record<string, string> = {
+              'Content-Type': 'application/json',
+              'User-Agent': 'Edgekit-Platform-Webhooks/1.0',
+              'X-Edgekit-Event': event,
+              'X-Edgekit-Table': table,
+            }
+
+            if (wh.secret) {
+              const signature = await computeHmacSha256(wh.secret, payloadString)
+              headers['X-Edgekit-Signature'] = `sha256=${signature}`
+            }
+
+            await fetch(wh.url, {
+              method: 'POST',
+              headers,
+              body: payloadString,
+              signal: AbortSignal.timeout(5000),
+            })
+          } catch (whErr) {
+            console.warn(`[Webhook Delivery Failed to ${wh.url}]:`, whErr)
+          }
+        }),
+      )
+
+      if (c.executionCtx?.waitUntil) {
+        c.executionCtx.waitUntil(dispatchPromise)
+      } else {
+        dispatchPromise.catch(() => {})
+      }
+    }
   } catch (err) {
-    console.warn('[Realtime CDC Broadcast Warning]:', err)
+    console.warn('[Realtime CDC / Webhook Warning]:', err)
   }
 }
 
@@ -88,8 +223,11 @@ dbRoutes.get('/:table', async (c) => {
   const table = c.req.param('table')
   const role = c.get('role')
 
+  const runtime = await getDatabaseRuntime()
+  const db = runtime.db
+
   try {
-    checkTableAccess(table, role)
+    await checkTableAccess(db, table, role, 'read')
   } catch (err: any) {
     return c.json(
       {
@@ -99,9 +237,6 @@ dbRoutes.get('/:table', async (c) => {
       403,
     )
   }
-
-  const runtime = await getDatabaseRuntime()
-  const db = runtime.db
 
   const query = c.req.query()
   const selectParam = query['select'] || '*'
@@ -211,8 +346,9 @@ dbRoutes.get('/:table/:id', async (c) => {
   const role = c.get('role')
 
   try {
-    checkTableAccess(table, role)
     const runtime = await getDatabaseRuntime()
+    await checkTableAccess(runtime.db, table, role, 'read')
+
     const query = sql`SELECT * FROM ${sql.raw(`\`${table}\``)} WHERE \`id\` = ${id} LIMIT 1`
     const rows: any[] = await runtime.db.all(query)
 
@@ -228,7 +364,8 @@ dbRoutes.get('/:table/:id', async (c) => {
 
     return c.json({ success: true, data: rows[0] })
   } catch (err: any) {
-    const isForbidden = err.message?.includes('Acesso negado')
+    const isForbidden =
+      err.message?.includes('Acesso negado') || err.message?.includes('Acesso restrito')
     return c.json(
       { success: false, error: { code: isForbidden ? 'FORBIDDEN' : 'DB_ERROR', message: err.message } },
       isForbidden ? 403 : 500,
@@ -242,7 +379,9 @@ dbRoutes.post('/:table', requireAuth(), async (c) => {
   const role = c.get('role')
 
   try {
-    checkTableAccess(table, role)
+    const runtime = await getDatabaseRuntime()
+    await checkTableAccess(runtime.db, table, role, 'write')
+
     const body = await c.req.json()
     const records = Array.isArray(body) ? body : [body]
 
@@ -250,7 +389,6 @@ dbRoutes.post('/:table', requireAuth(), async (c) => {
       return c.json({ success: false, error: { message: 'Nenhum registro para inserir.' } }, 400)
     }
 
-    const runtime = await getDatabaseRuntime()
     const results = []
 
     for (const record of records) {
@@ -282,7 +420,8 @@ dbRoutes.post('/:table', requireAuth(), async (c) => {
       201,
     )
   } catch (err: any) {
-    const isForbidden = err.message?.includes('Acesso negado')
+    const isForbidden =
+      err.message?.includes('Acesso negado') || err.message?.includes('Acesso restrito')
     return c.json(
       { success: false, error: { code: isForbidden ? 'FORBIDDEN' : 'DB_INSERT_ERROR', message: err.message } },
       isForbidden ? 403 : 500,
@@ -297,7 +436,9 @@ dbRoutes.patch('/:table/:id', requireAuth(), async (c) => {
   const role = c.get('role')
 
   try {
-    checkTableAccess(table, role)
+    const runtime = await getDatabaseRuntime()
+    await checkTableAccess(runtime.db, table, role, 'write')
+
     const body = await c.req.json()
     const keys = Object.keys(body)
 
@@ -315,7 +456,6 @@ dbRoutes.patch('/:table/:id', requireAuth(), async (c) => {
     )
 
     const updateQuery = sql`UPDATE ${sql.raw(`\`${table}\``)} SET ${setClauses} WHERE \`id\` = ${id} RETURNING *`
-    const runtime = await getDatabaseRuntime()
     const updated: any[] = await runtime.db.all(updateQuery)
 
     if (!updated || updated.length === 0) {
@@ -329,7 +469,8 @@ dbRoutes.patch('/:table/:id', requireAuth(), async (c) => {
 
     return c.json({ success: true, data: updatedRecord })
   } catch (err: any) {
-    const isForbidden = err.message?.includes('Acesso negado')
+    const isForbidden =
+      err.message?.includes('Acesso negado') || err.message?.includes('Acesso restrito')
     return c.json(
       { success: false, error: { code: isForbidden ? 'FORBIDDEN' : 'DB_UPDATE_ERROR', message: err.message } },
       isForbidden ? 403 : 500,
@@ -344,9 +485,10 @@ dbRoutes.delete('/:table/:id', requireAuth(), async (c) => {
   const role = c.get('role')
 
   try {
-    checkTableAccess(table, role)
-    const deleteQuery = sql`DELETE FROM ${sql.raw(`\`${table}\``)} WHERE \`id\` = ${id}`
     const runtime = await getDatabaseRuntime()
+    await checkTableAccess(runtime.db, table, role, 'write')
+
+    const deleteQuery = sql`DELETE FROM ${sql.raw(`\`${table}\``)} WHERE \`id\` = ${id}`
     await runtime.db.run(deleteQuery)
 
     // Emissão CDC para o registro deletado
@@ -354,7 +496,8 @@ dbRoutes.delete('/:table/:id', requireAuth(), async (c) => {
 
     return c.json({ success: true, message: `Registro removido com sucesso de ${table}`, id })
   } catch (err: any) {
-    const isForbidden = err.message?.includes('Acesso negado')
+    const isForbidden =
+      err.message?.includes('Acesso negado') || err.message?.includes('Acesso restrito')
     return c.json(
       { success: false, error: { code: isForbidden ? 'FORBIDDEN' : 'DB_DELETE_ERROR', message: err.message } },
       isForbidden ? 403 : 500,

@@ -5,7 +5,10 @@ import {
   fetchTables,
   fetchTableRows,
   insertTableRow,
+  updateTableRow,
   deleteTableRow,
+  fetchTablePolicy,
+  updateTablePolicy,
   runSql,
   createTable,
   dropTable,
@@ -78,6 +81,49 @@ export function useInsertTableRowMutation() {
       });
       queryClient.invalidateQueries({
         queryKey: queryKeys.stats.detail(),
+      });
+    },
+  });
+}
+
+export function useUpdateTableRowMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ table, id, record }: { table: string; id: string; record: any }) =>
+      updateTableRow(table, id, record),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ['database', 'rows', variables.table],
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.stats.detail(),
+      });
+    },
+  });
+}
+
+export function useTablePolicyQuery(table: string) {
+  return useQuery({
+    queryKey: ['database', 'policy', table],
+    queryFn: () => fetchTablePolicy(table),
+    enabled: Boolean(table),
+    ...queryDefaults.database,
+  });
+}
+
+export function useUpdateTablePolicyMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      table,
+      policy,
+    }: {
+      table: string;
+      policy: { readLevel: string; writeLevel: string };
+    }) => updateTablePolicy(table, policy),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ['database', 'policy', variables.table],
       });
     },
   });
