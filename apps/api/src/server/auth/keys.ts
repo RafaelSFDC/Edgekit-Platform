@@ -14,8 +14,16 @@ export interface ValidatedApiKey {
 
 export async function ensureDefaultKeys(db: AppDatabase): Promise<void> {
   const bindings = await getBindings()
-  const anonKey = bindings.HONOBASE_ANON_KEY || 'hb_anon_default'
-  const serviceRoleKey = bindings.HONOBASE_SERVICE_ROLE_KEY || 'hb_service_default'
+  const anonKey =
+    bindings.EDGEKIT_ANON_KEY ||
+    bindings.HONOBASE_ANON_KEY ||
+    'hb_anon_default'
+  const serviceRoleKey =
+    bindings.EDGEKIT_SERVICE_ROLE_KEY ||
+    bindings.EDGEKIT_APP_SECRET ||
+    bindings.DEFAULT_APP_SECRET ||
+    bindings.HONOBASE_SERVICE_ROLE_KEY ||
+    'hb_service_default'
   const now = new Date()
 
   try {
@@ -68,7 +76,13 @@ export async function validateApiKey(
   const bindings = await getBindings()
 
   // Checagem rápida de memória contra as envs padrão
-  if (bindings.HONOBASE_SERVICE_ROLE_KEY && keyString === bindings.HONOBASE_SERVICE_ROLE_KEY) {
+  const masterServiceKey =
+    bindings.EDGEKIT_SERVICE_ROLE_KEY ||
+    bindings.EDGEKIT_APP_SECRET ||
+    bindings.DEFAULT_APP_SECRET ||
+    bindings.HONOBASE_SERVICE_ROLE_KEY
+
+  if (masterServiceKey && keyString === masterServiceKey) {
     return {
       id: 'env_service_role',
       name: 'Environment Service Role Key',
@@ -77,7 +91,10 @@ export async function validateApiKey(
     }
   }
 
-  if (bindings.HONOBASE_ANON_KEY && keyString === bindings.HONOBASE_ANON_KEY) {
+  const defaultAnonKey =
+    bindings.EDGEKIT_ANON_KEY || bindings.HONOBASE_ANON_KEY
+
+  if (defaultAnonKey && keyString === defaultAnonKey) {
     return {
       id: 'env_anon',
       name: 'Environment Anon Key',

@@ -4,7 +4,7 @@ import path from 'node:path'
 const drizzleDir = path.resolve(process.cwd(), 'drizzle')
 const outFile = path.resolve(
   process.cwd(),
-  'src/server/db/d1-dev-migrations.generated.ts',
+  'apps/api/src/server/db/d1-dev-migrations.generated.ts',
 )
 
 type JournalEntry = { tag: string }

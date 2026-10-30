@@ -75,9 +75,9 @@ describe('HonoBase Core & Cloudflare Compatibility', () => {
     expect(client.realtime).toBeDefined()
   })
 
-  it('SDK Cliente pode executar requisições customizadas com o fetch do Hono app', async () => {
+  it('Tabelas de sistema devem ser bloqueadas para chave anonKey na Data API', async () => {
     const bindings = await getBindings()
-    const anonKey = bindings.HONOBASE_ANON_KEY || 'hb_anon_test'
+    const anonKey = bindings.EDGEKIT_ANON_KEY || bindings.HONOBASE_ANON_KEY || 'hb_anon_test'
 
     const client = createHonoBaseClient({
       url: 'http://localhost',
@@ -89,7 +89,46 @@ describe('HonoBase Core & Cloudflare Compatibility', () => {
     })
 
     const result = await client.from('users').select('id, name').limit(5).execute()
+    expect(result.error).not.toBeNull()
+    expect(result.error?.message).toContain('Acesso negado: a tabela "users" pertence à infraestrutura')
+  })
+
+  it('SDK Cliente com serviceRoleKey pode consultar tabelas de sistema', async () => {
+    const bindings = await getBindings()
+    const serviceRoleKey =
+      bindings.EDGEKIT_SERVICE_ROLE_KEY || bindings.HONOBASE_SERVICE_ROLE_KEY || 'hb_service_default'
+
+    const client = createHonoBaseClient({
+      url: 'http://localhost',
+      serviceRoleKey,
+      fetch: async (input, init) => {
+        const path = typeof input === 'string' ? new URL(input).pathname + new URL(input).search : input
+        return Promise.resolve(app.request(path as string, init as any)) as unknown as Response
+      },
+    })
+
+    const result = await client.from('users').select('id, name').limit(5).execute()
     expect(result.error).toBeNull()
     expect(Array.isArray(result.data)).toBe(true)
+  })
+
+  it('POST /api/v1/auth/login valida a chave de serviço e retorna status autenticado', async () => {
+    const bindings = await getBindings()
+    const serviceRoleKey =
+      bindings.EDGEKIT_SERVICE_ROLE_KEY || bindings.HONOBASE_SERVICE_ROLE_KEY || 'hb_service_default'
+
+    const res = await app.request('/api/v1/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passkey: serviceRoleKey }),
+    })
+
+    expect(res.status).toBe(200)
+    const json: any = await res.json()
+    expect(json.authenticated).toBe(true)
+    expect(json.role).toBe('admin')
+
+    const setCookieHeader = res.headers.get('set-cookie')
+    expect(setCookieHeader).toContain('edgekit_platform_session')
   })
 })

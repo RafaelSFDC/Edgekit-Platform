@@ -22,6 +22,13 @@ export interface QueryBuilder<T = any> {
   execute(): Promise<{ data: T[] | null; error: Error | null; meta?: any }>
 }
 
+export interface RealtimeChannel {
+  on(event: string, callback: (payload: any) => void): RealtimeChannel
+  subscribe(): RealtimeChannel
+  send(event: string, payload: any): void
+  unsubscribe(): void
+}
+
 export function createEdgekitClient(options: EdgekitClientOptions) {
   const baseUrl = options.url.replace(/\/+$/, '')
   const apiKey = options.serviceRoleKey || options.anonKey || ''
@@ -35,7 +42,54 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
     headers['Authorization'] = `Bearer ${apiKey}`
   }
 
-  // 1. DATABASE CLIENT & QUERY BUILDER
+  // 1. REALTIME CLIENT (Durable Objects WebSockets)
+  const realtime = {
+    channel(channelName: string): RealtimeChannel {
+      const callbacks = new Map<string, Array<(payload: any) => void>>()
+      let socket: any = null
+
+      const channelObj: RealtimeChannel = {
+        on(event: string, callback: (payload: any) => void) {
+          const list = callbacks.get(event) || []
+          list.push(callback)
+          callbacks.set(event, list)
+          return channelObj
+        },
+        subscribe() {
+          const wsProtocol = baseUrl.startsWith('https') ? 'wss' : 'ws'
+          const wsUrl = `${baseUrl.replace(/^https?/, wsProtocol)}/api/v1/realtime/${channelName}/ws?apikey=${apiKey}`
+          socket = new (globalThis as any).WebSocket(wsUrl)
+
+          socket.onmessage = (msg: any) => {
+            try {
+              const data = JSON.parse(msg.data)
+              const eventCallbacks = callbacks.get(data.event)
+              if (eventCallbacks) {
+                eventCallbacks.forEach((cb) => cb(data.payload))
+              }
+              const allCallbacks = callbacks.get('*')
+              if (allCallbacks) {
+                allCallbacks.forEach((cb) => cb(data))
+              }
+            } catch {}
+          }
+          return channelObj
+        },
+        send(event: string, payload: any) {
+          if (socket && socket.readyState === 1) {
+            socket.send(JSON.stringify({ event, data: payload }))
+          }
+        },
+        unsubscribe() {
+          socket?.close()
+        },
+      }
+
+      return channelObj
+    },
+  }
+
+  // 2. DATABASE CLIENT & QUERY BUILDER (com suporte a Realtime CDC)
   function from<T = any>(table: string) {
     const params = new URLSearchParams()
 
@@ -158,10 +212,22 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
           },
         }
       },
+      // Realtime Database CDC Listener
+      on(event: 'INSERT' | 'UPDATE' | 'DELETE' | '*', callback: (payload: any) => void) {
+        const ch = realtime.channel(`db:${table}`)
+        if (event === '*') {
+          ch.on('INSERT', callback)
+          ch.on('UPDATE', callback)
+          ch.on('DELETE', callback)
+        } else {
+          ch.on(event, callback)
+        }
+        return ch
+      },
     }
   }
 
-  // 2. STORAGE CLIENT
+  // 3. STORAGE CLIENT
   const storage = {
     from(bucket: string) {
       return {
@@ -181,6 +247,21 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
           const json: any = await res.json()
           return { data: json.data || null, error: json.error ? new Error(json.error.message) : null }
         },
+        async delete(path: string) {
+          const res = await customFetch(`${baseUrl}/api/v1/storage/${bucket}/file/${path}`, {
+            method: 'DELETE',
+            headers,
+          })
+          const json: any = await res.json()
+          return { data: json, error: !res.ok ? new Error(json.error?.message || 'Delete error') : null }
+        },
+        async list() {
+          const res = await customFetch(`${baseUrl}/api/v1/storage/${bucket}/list`, {
+            headers,
+          })
+          const json: any = await res.json()
+          return { data: json.data || [], error: !res.ok ? new Error(json.error?.message || 'List error') : null }
+        },
         getPublicUrl(path: string) {
           return {
             data: {
@@ -192,48 +273,7 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
     },
   }
 
-  // 3. REALTIME CLIENT (Durable Objects WebSockets)
-  const realtime = {
-    channel(channelName: string) {
-      const callbacks = new Map<string, Array<(payload: any) => void>>()
-      let socket: any = null
-
-      return {
-        on(event: string, callback: (payload: any) => void) {
-          const list = callbacks.get(event) || []
-          list.push(callback)
-          callbacks.set(event, list)
-          return this
-        },
-        subscribe() {
-          const wsProtocol = baseUrl.startsWith('https') ? 'wss' : 'ws'
-          const wsUrl = `${baseUrl.replace(/^https?/, wsProtocol)}/api/v1/realtime/${channelName}/ws?apikey=${apiKey}`
-          socket = new (globalThis as any).WebSocket(wsUrl)
-
-          socket.onmessage = (msg: any) => {
-            try {
-              const data = JSON.parse(msg.data)
-              const eventCallbacks = callbacks.get(data.event)
-              if (eventCallbacks) {
-                eventCallbacks.forEach((cb) => cb(data.payload))
-              }
-            } catch {}
-          }
-          return this
-        },
-        send(event: string, payload: any) {
-          if (socket && socket.readyState === 1) {
-            socket.send(JSON.stringify({ event, data: payload }))
-          }
-        },
-        unsubscribe() {
-          socket?.close()
-        },
-      }
-    },
-  }
-
-  // 4. AUTH CLIENT (Better-Auth)
+  // 4. AUTH CLIENT
   const auth = {
     async getUser() {
       const res = await customFetch(`${baseUrl}/api/v1/auth/me`, { headers })

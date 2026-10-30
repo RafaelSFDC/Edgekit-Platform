@@ -1,8 +1,11 @@
 import type { MiddlewareHandler } from 'hono'
+import { getCookie } from 'hono/cookie'
 import type { AppEnv } from '../types'
 import { getDatabaseRuntime } from '../db'
 import { getSessionFromHeaders } from './index'
 import { validateApiKey } from './keys'
+
+export const AUTH_COOKIE_NAME = 'edgekit_platform_session'
 
 export function authContextMiddleware(): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
@@ -17,7 +20,12 @@ export function authContextMiddleware(): MiddlewareHandler<AppEnv> {
       bearerToken = authHeader.slice(7).trim()
     }
 
-    const keyToValidate = rawApiKey || (bearerToken?.startsWith('hb_') ? bearerToken : undefined)
+    const sessionCookie = getCookie(c, AUTH_COOKIE_NAME)
+
+    const keyToValidate =
+      rawApiKey ||
+      sessionCookie ||
+      (bearerToken && bearerToken.length > 0 ? bearerToken : undefined)
 
     if (keyToValidate) {
       const runtime = await getDatabaseRuntime()

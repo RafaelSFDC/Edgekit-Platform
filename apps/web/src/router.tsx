@@ -31,7 +31,7 @@ const DashboardGuard: React.FC = () => {
     );
   }
 
-  if (!isSetupComplete || !isAuthenticated) {
+  if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
 

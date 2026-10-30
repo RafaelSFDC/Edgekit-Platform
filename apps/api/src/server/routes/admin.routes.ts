@@ -150,6 +150,196 @@ adminRoutes.get('/tables', requireAdmin(), async (c) => {
   return c.json({ success: true, data: tablesWithCounts })
 })
 
+const SAFE_NAME = /^[a-zA-Z0-9_]+$/
+const ALLOWED_SQL_TYPES = new Set(['TEXT', 'INTEGER', 'REAL', 'BLOB', 'JSON'])
+const SYSTEM_TABLES_SET = new Set([
+  'users',
+  'sessions',
+  'accounts',
+  'verifications',
+  'api_keys',
+  'storage_files',
+  'audit_logs',
+  'webhooks',
+  'app_settings',
+  '__honobase_migrations',
+  '__d1_migrations',
+  'drizzle_migrations',
+  'sqlite_master',
+  'sqlite_sequence',
+])
+
+// Criador visual de tabelas (Visual DDL)
+adminRoutes.post('/tables', requireAdmin(), async (c) => {
+  const body = await c.req.json()
+  const tableName = (body.name || '').trim()
+
+  if (!SAFE_NAME.test(tableName)) {
+    return c.json(
+      { success: false, error: { message: `Nome de tabela inválido: "${tableName}"` } },
+      400,
+    )
+  }
+
+  if (SYSTEM_TABLES_SET.has(tableName.toLowerCase())) {
+    return c.json(
+      { success: false, error: { message: `O nome "${tableName}" é reservado pelo sistema.` } },
+      400,
+    )
+  }
+
+  const columns = Array.isArray(body.columns) ? body.columns : []
+  if (columns.length === 0) {
+    return c.json(
+      { success: false, error: { message: 'A tabela deve conter ao menos uma coluna.' } },
+      400,
+    )
+  }
+
+  const colDefinitions: string[] = []
+  let hasPrimaryKey = false
+
+  for (const col of columns) {
+    const colName = (col.name || '').trim()
+    const colType = (col.type || 'TEXT').toUpperCase()
+
+    if (!SAFE_NAME.test(colName)) {
+      return c.json(
+        { success: false, error: { message: `Nome de coluna inválido: "${colName}"` } },
+        400,
+      )
+    }
+
+    if (!ALLOWED_SQL_TYPES.has(colType)) {
+      return c.json(
+        { success: false, error: { message: `Tipo de dado SQL não suportado: "${colType}"` } },
+        400,
+      )
+    }
+
+    const typeKeyword = colType === 'JSON' ? 'TEXT' : colType
+    let def = `\`${colName}\` ${typeKeyword}`
+
+    if (col.primaryKey) {
+      def += ' PRIMARY KEY'
+      hasPrimaryKey = true
+    }
+
+    if (col.notNull) {
+      def += ' NOT NULL'
+    }
+
+    if (col.defaultValue !== undefined && col.defaultValue !== '') {
+      def += ` DEFAULT ${col.defaultValue}`
+    }
+
+    colDefinitions.push(def)
+  }
+
+  // Se não foi definida primary key explícita, adiciona um id text primário padrão
+  if (!hasPrimaryKey) {
+    colDefinitions.unshift('`id` TEXT PRIMARY KEY NOT NULL')
+  }
+
+  const createTableSql = `CREATE TABLE \`${tableName}\` (\n  ${colDefinitions.join(',\n  ')}\n);`
+
+  const db = await getDb()
+  try {
+    await db.run(sql.raw(createTableSql))
+    return c.json(
+      {
+        success: true,
+        message: `Tabela "${tableName}" criada com sucesso!`,
+        sql: createTableSql,
+      },
+      201,
+    )
+  } catch (err: any) {
+    return c.json(
+      {
+        success: false,
+        error: { message: `Falha ao criar tabela: ${err.message}` },
+      },
+      500,
+    )
+  }
+})
+
+// Deletar tabela (Drop Table)
+adminRoutes.delete('/tables/:name', requireAdmin(), async (c) => {
+  const tableName = c.req.param('name').trim()
+
+  if (!SAFE_NAME.test(tableName)) {
+    return c.json({ success: false, error: { message: 'Nome de tabela inválido.' } }, 400)
+  }
+
+  if (SYSTEM_TABLES_SET.has(tableName.toLowerCase())) {
+    return c.json(
+      {
+        success: false,
+        error: { message: 'Tabelas do sistema não podem ser excluídas.' },
+      },
+      403,
+    )
+  }
+
+  const db = await getDb()
+  try {
+    await db.run(sql.raw(`DROP TABLE \`${tableName}\``))
+    return c.json({
+      success: true,
+      message: `Tabela "${tableName}" excluída com sucesso.`,
+    })
+  } catch (err: any) {
+    return c.json({ success: false, error: { message: err.message } }, 500)
+  }
+})
+
+// Adicionar coluna a tabela existente
+adminRoutes.post('/tables/:name/columns', requireAdmin(), async (c) => {
+  const tableName = c.req.param('name').trim()
+  const body = await c.req.json()
+  const colName = (body.name || '').trim()
+  const colType = (body.type || 'TEXT').toUpperCase()
+
+  if (!SAFE_NAME.test(tableName) || !SAFE_NAME.test(colName)) {
+    return c.json({ success: false, error: { message: 'Identificadores inválidos.' } }, 400)
+  }
+
+  if (SYSTEM_TABLES_SET.has(tableName.toLowerCase())) {
+    return c.json(
+      { success: false, error: { message: 'Tabelas de sistema não podem ser alteradas.' } },
+      403,
+    )
+  }
+
+  if (!ALLOWED_SQL_TYPES.has(colType)) {
+    return c.json(
+      { success: false, error: { message: `Tipo de dado SQL inválido: "${colType}"` } },
+      400,
+    )
+  }
+
+  const typeKeyword = colType === 'JSON' ? 'TEXT' : colType
+  let alterSql = `ALTER TABLE \`${tableName}\` ADD COLUMN \`${colName}\` ${typeKeyword}`
+
+  if (body.defaultValue !== undefined && body.defaultValue !== '') {
+    alterSql += ` DEFAULT ${body.defaultValue}`
+  }
+
+  const db = await getDb()
+  try {
+    await db.run(sql.raw(alterSql))
+    return c.json({
+      success: true,
+      message: `Coluna "${colName}" adicionada à tabela "${tableName}".`,
+      sql: alterSql,
+    })
+  } catch (err: any) {
+    return c.json({ success: false, error: { message: err.message } }, 500)
+  }
+})
+
 // SQL Runner para o Database Studio do Admin
 adminRoutes.post('/sql', requireAdmin(), async (c) => {
   const body = await c.req.json()

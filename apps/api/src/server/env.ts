@@ -12,6 +12,10 @@ export interface AppBindings {
   REALTIME?: DurableObjectNamespace
   ASSETS?: Fetcher
   BETTER_AUTH_SECRET?: string
+  EDGEKIT_ANON_KEY?: string
+  EDGEKIT_SERVICE_ROLE_KEY?: string
+  EDGEKIT_APP_SECRET?: string
+  DEFAULT_APP_SECRET?: string
   HONOBASE_ANON_KEY?: string
   HONOBASE_SERVICE_ROLE_KEY?: string
   APP_NAME?: string
@@ -78,13 +82,24 @@ async function loadProcessBindings(): Promise<AppBindings> {
     return {}
   }
 
+  const anonKey =
+    process.env.EDGEKIT_ANON_KEY || process.env.HONOBASE_ANON_KEY
+  const serviceRoleKey =
+    process.env.EDGEKIT_SERVICE_ROLE_KEY ||
+    process.env.EDGEKIT_APP_SECRET ||
+    process.env.DEFAULT_APP_SECRET ||
+    process.env.HONOBASE_SERVICE_ROLE_KEY
+
   return {
     ENVIRONMENT: process.env.ENVIRONMENT || 'development',
     BETTER_AUTH_SECRET: process.env.BETTER_AUTH_SECRET,
-    HONOBASE_ANON_KEY: process.env.HONOBASE_ANON_KEY,
-    HONOBASE_SERVICE_ROLE_KEY: process.env.HONOBASE_SERVICE_ROLE_KEY,
-    APP_NAME: process.env.APP_NAME || 'HonoBase',
-    APP_VERSION: process.env.APP_VERSION || '0.1.0',
+    EDGEKIT_ANON_KEY: anonKey,
+    EDGEKIT_SERVICE_ROLE_KEY: serviceRoleKey,
+    DEFAULT_APP_SECRET: serviceRoleKey,
+    HONOBASE_ANON_KEY: anonKey,
+    HONOBASE_SERVICE_ROLE_KEY: serviceRoleKey,
+    APP_NAME: process.env.APP_NAME || 'Edgekit Platform',
+    APP_VERSION: process.env.APP_VERSION || '1.0.0',
     APP_URL: process.env.APP_URL || 'http://localhost:3000',
     CLOUDFLARE_PLAN: process.env.CLOUDFLARE_PLAN || 'free',
     ENABLE_DYNAMIC_WORKERS: process.env.ENABLE_DYNAMIC_WORKERS || 'false',

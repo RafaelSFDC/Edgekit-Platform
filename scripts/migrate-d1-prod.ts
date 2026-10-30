@@ -13,13 +13,13 @@ function parseArgs(): MigrateOptions {
   const checkOnly =
     args.includes('--list') || args.includes('--check') || args.includes('--dry-run')
 
-  let database = 'honobase-db'
+  let database = 'edgekit-platform-db'
   const dbIndex = args.indexOf('--database')
   if (dbIndex !== -1 && args[dbIndex + 1]) {
     database = args[dbIndex + 1]
   }
 
-  let config = 'wrangler.jsonc'
+  let config = 'apps/api/wrangler.jsonc'
   const configIndex = args.indexOf('--config')
   if (configIndex !== -1 && args[configIndex + 1]) {
     config = args[configIndex + 1]
@@ -53,7 +53,7 @@ function main() {
     process.exit(1)
   }
 
-  console.info(`📦 HonoBase Production D1 Migrations Manager`)
+  console.info(`📦 Edgekit Platform Production D1 Migrations Manager`)
   console.info(`   Database: ${database}`)
   console.info(`   Config:   ${config}`)
   console.info(

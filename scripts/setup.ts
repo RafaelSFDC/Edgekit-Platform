@@ -10,7 +10,7 @@ function ensureDirectory(dir: string) {
 
 async function setup() {
   console.info('====================================================')
-  console.info('🚀 Bem-vindo ao HonoBase - Cloudflare Self-Hosted BaaS')
+  console.info('⚡ Bem-vindo ao Edgekit Platform - Cloudflare Self-Hosted BaaS')
   console.info('====================================================\n')
 
   const cwd = process.cwd()
@@ -22,7 +22,7 @@ async function setup() {
   // 1. Criar pastas locais
   ensureDirectory(localStorageDir)
   ensureDirectory(drizzleDir)
-  ensureDirectory(path.join(cwd, 'src', 'server', 'db'))
+  ensureDirectory(path.join(cwd, 'apps', 'api', 'src', 'server', 'db'))
 
   // 2. Garantir .env
   if (!fs.existsSync(envPath)) {
@@ -33,6 +33,14 @@ async function setup() {
     template = template.replace(
       /BETTER_AUTH_SECRET=.*/,
       `BETTER_AUTH_SECRET=${keys.betterAuthSecret}`,
+    )
+    template = template.replace(
+      /EDGEKIT_ANON_KEY=.*/,
+      `EDGEKIT_ANON_KEY=${keys.anonKey}`,
+    )
+    template = template.replace(
+      /EDGEKIT_SERVICE_ROLE_KEY=.*/,
+      `EDGEKIT_SERVICE_ROLE_KEY=${keys.serviceRoleKey}`,
     )
     template = template.replace(
       /HONOBASE_ANON_KEY=.*/,
@@ -52,6 +60,8 @@ async function setup() {
   // 3. Gerar fallback de migrações
   const generatedMigrations = path.join(
     cwd,
+    'apps',
+    'api',
     'src',
     'server',
     'db',
@@ -69,13 +79,10 @@ async function setup() {
   console.info('====================================================')
   console.info('Para desenvolvimento local:')
   console.info('  👉 pnpm dev')
-  console.info('  Acesse o Admin Dashboard em: http://localhost:3000/admin')
-  console.info('  Documentação de APIs interativa: http://localhost:3000/docs\n')
-  console.info('Para publicar na Cloudflare:')
-  console.info('  1. wrangler d1 create honobase-db')
-  console.info('  2. wrangler r2 bucket create honobase-storage')
-  console.info('  3. Atualize o database_id no wrangler.jsonc')
-  console.info('  4. pnpm deploy')
+  console.info('  Acesse o Admin Dashboard em: http://localhost:5173')
+  console.info('  API e Docs (Scalar): http://localhost:8787/docs\n')
+  console.info('Para publicar na Cloudflare em 1 clique:')
+  console.info('  👉 pnpm setup:cf')
   console.info('====================================================\n')
 }
 

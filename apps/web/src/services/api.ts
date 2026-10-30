@@ -37,6 +37,65 @@ function getHeaders(customHeaders?: Record<string, string>): Record<string, stri
   return headers;
 }
 
+export async function fetchAuthMe(): Promise<{ authenticated: boolean; data?: any }> {
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/auth/me`, {
+      headers: getHeaders(),
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      return { authenticated: false };
+    }
+    const json = await res.json();
+    return {
+      authenticated: Boolean(json.authenticated),
+      data: json.data,
+    };
+  } catch {
+    return { authenticated: false };
+  }
+}
+
+export async function loginAuth(passkey: string): Promise<{ authenticated: boolean; role?: string }> {
+  const clean = passkey.trim();
+  const res = await fetch(`${API_BASE}/api/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ passkey: clean }),
+  });
+
+  const json = await res.json().catch(() => ({ authenticated: false }));
+  if (!res.ok || !json.authenticated) {
+    throw new ApiError(
+      json.error?.message || 'Chave de acesso inválida.',
+      res.status
+    );
+  }
+
+  // Se salvarmos no localStorage também, facilita chamadas com cabeçalho explícito
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(STORAGE_KEY_ADMIN, clean);
+  }
+
+  return { authenticated: true, role: json.role };
+}
+
+export async function logoutAuth(): Promise<{ authenticated: boolean }> {
+  try {
+    await fetch(`${API_BASE}/api/v1/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+    });
+  } catch {}
+
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem(STORAGE_KEY_ADMIN);
+  }
+
+  return { authenticated: false };
+}
+
 export async function checkSetupStatus(): Promise<SetupStatusResponse> {
   const res = await fetch(`${API_BASE}/api/v1/admin/setup-status`);
   if (!res.ok) {
@@ -86,6 +145,42 @@ export async function fetchTables(): Promise<D1TableInfo[]> {
   }
   const json = await res.json();
   return json.data || [];
+}
+
+export async function createTable(data: {
+  name: string;
+  columns: Array<{
+    name: string;
+    type: string;
+    primaryKey?: boolean;
+    notNull?: boolean;
+    defaultValue?: string;
+  }>;
+}): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/tables`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao criar tabela.', res.status);
+  }
+  return json;
+}
+
+export async function dropTable(tableName: string): Promise<boolean> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/tables/${encodeURIComponent(tableName)}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao excluir tabela.', res.status);
+  }
+  return true;
 }
 
 export async function fetchTableRows(

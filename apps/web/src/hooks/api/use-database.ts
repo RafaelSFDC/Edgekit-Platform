@@ -7,6 +7,8 @@ import {
   insertTableRow,
   deleteTableRow,
   runSql,
+  createTable,
+  dropTable,
 } from '../../services/api';
 
 export function useTablesQuery() {
@@ -14,6 +16,45 @@ export function useTablesQuery() {
     queryKey: queryKeys.database.tables(),
     queryFn: fetchTables,
     ...queryDefaults.database,
+  });
+}
+
+export function useCreateTableMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: {
+      name: string;
+      columns: Array<{
+        name: string;
+        type: string;
+        primaryKey?: boolean;
+        notNull?: boolean;
+        defaultValue?: string;
+      }>;
+    }) => createTable(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.database.tables(),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.stats.detail(),
+      });
+    },
+  });
+}
+
+export function useDropTableMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (tableName: string) => dropTable(tableName),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.database.tables(),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.stats.detail(),
+      });
+    },
   });
 }
 

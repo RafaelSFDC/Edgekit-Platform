@@ -1,57 +1,109 @@
 import React, { useState } from 'react';
-import { useNavigate } from '@tanstack/react-router';
+import { Navigate } from '@tanstack/react-router';
+import {
+  KeyRound,
+  Eye,
+  EyeOff,
+  AlertCircle,
+  Loader2,
+  Globe,
+  Sun,
+  Moon,
+  ArrowRight,
+} from 'lucide-react';
 import { EdgekitLogo } from '../components/common/EdgekitLogo';
-import { useI18n } from '../i18n/context';
 import { useAuth } from '../context/auth-context';
-import { usePerformSetupMutation } from '../hooks/api/use-auth';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
+import { useI18n } from '../i18n/context';
+import { useTheme } from '../theme/context';
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+  CardFooter,
+} from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { KeyRound, UserCheck, ArrowRight, Sparkles } from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { toast } from 'sonner';
 
 export const LoginPage: React.FC = () => {
-  const { t } = useI18n();
-  const navigate = useNavigate();
-  const { login, isSetupComplete, checkSetup } = useAuth();
-  const performSetupMutation = usePerformSetupMutation();
+  const { isAuthenticated, isLoading, isLoggingIn, login, error: authError } = useAuth();
+  const { locale, setLocale, t } = useI18n();
+  const { resolvedTheme, toggleTheme } = useTheme();
 
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [setupData, setSetupData] = useState({
-    name: '',
-    email: '',
-    password: '',
-  });
+  const [passkey, setPasskey] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
 
-  const handleLogin = (e: React.FormEvent) => {
+  if (isAuthenticated) {
+    return <Navigate to="/" replace />;
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-svh w-full flex-col items-center justify-center bg-background text-foreground gap-3">
+        <div className="flex size-12 items-center justify-center rounded-xl bg-orange-500/10 border border-orange-500/20 text-orange-500 animate-pulse">
+          <EdgekitLogo size={28} module="platform" />
+        </div>
+        <p className="text-xs text-muted-foreground animate-pulse">{t.common.loading}</p>
+      </div>
+    );
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!apiKeyInput.trim()) {
-      toast.error('Informe a Service Role Key.');
+    setLocalError(null);
+
+    const trimmed = passkey.trim();
+    if (!trimmed) {
+      setLocalError('Informe a Chave de Acesso (Service Role Key).');
       return;
     }
-    login(apiKeyInput.trim());
-    toast.success('Autenticado com sucesso!');
-    navigate({ to: '/' });
-  };
 
-  const handleSetup = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!setupData.name || !setupData.email || !setupData.password) {
-      toast.error('Preencha todos os campos do administrador.');
-      return;
-    }
-
-    try {
-      await performSetupMutation.mutateAsync(setupData);
-      toast.success('Administrador criado com sucesso!');
-      await checkSetup();
-      navigate({ to: '/' });
-    } catch (err: any) {
-      toast.error(err.message || 'Falha ao concluir setup.');
+    const success = await login(trimmed);
+    if (success) {
+      toast.success('Autenticado com sucesso!');
+    } else {
+      const msg = authError || 'Chave de acesso inválida.';
+      setLocalError(msg);
+      toast.error(msg);
     }
   };
+
+  const displayError = localError || authError;
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center p-4 bg-background">
+    <div className="relative flex min-h-svh w-full flex-col items-center justify-center bg-background px-4 py-8 select-none">
+      {/* Botões Utilitários de Idioma e Tema no Canto Superior Direito */}
+      <div className="absolute top-4 right-4 flex items-center gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setLocale(locale === 'pt-BR' ? 'en' : 'pt-BR')}
+          className="h-8 px-2.5 text-xs text-muted-foreground hover:text-foreground gap-1.5 cursor-pointer"
+        >
+          <Globe className="size-3.5" />
+          <span className="font-semibold text-[10px] uppercase bg-muted px-1 py-0.5 rounded border border-border/70">
+            {locale === 'pt-BR' ? 'PT-BR' : 'EN'}
+          </span>
+        </Button>
+
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={toggleTheme}
+          className="size-8 text-muted-foreground hover:text-foreground cursor-pointer"
+          aria-label="Alternar Tema"
+        >
+          {resolvedTheme === 'dark' ? (
+            <Moon className="size-4 text-primary" />
+          ) : (
+            <Sun className="size-4 text-amber-500" />
+          )}
+        </Button>
+      </div>
+
       <div className="w-full max-w-md space-y-6">
         {/* Logo e Marca */}
         <div className="flex flex-col items-center text-center space-y-2">
@@ -62,114 +114,79 @@ export const LoginPage: React.FC = () => {
             <h1 className="text-xl font-bold tracking-tight text-foreground">
               Edgekit <span className="text-orange-500">Platform</span>
             </h1>
-            <p className="text-xs text-muted-foreground mt-0.5">Cloudflare Serverless Studio</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Cloudflare Serverless BaaS Studio</p>
           </div>
         </div>
 
-        {!isSetupComplete ? (
-          /* Formulário de Setup Inicial */
-          <Card className="border-primary/30 shadow-lg">
-            <form onSubmit={handleSetup}>
-              <CardHeader className="space-y-1">
-                <div className="flex items-center gap-1.5 text-primary text-xs font-semibold">
-                  <Sparkles className="size-3.5" />
-                  <span>Setup Inicial</span>
-                </div>
-                <CardTitle className="text-lg">{t.login.setupTitle}</CardTitle>
-                <CardDescription className="text-xs">
-                  {t.login.setupSubtitle}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3.5">
-                <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">
-                    {t.login.nameLabel}
-                  </label>
+        {/* Card de Login */}
+        <Card className="shadow-lg border-border/80">
+          <form onSubmit={handleSubmit}>
+            <CardHeader className="space-y-1">
+              <CardTitle className="text-lg">{t.login.title}</CardTitle>
+              <CardDescription className="text-xs">
+                {t.login.subtitle}
+              </CardDescription>
+            </CardHeader>
+
+            <CardContent className="space-y-3.5">
+              {displayError && (
+                <Alert variant="destructive" className="py-2 px-3 text-xs flex items-center gap-2">
+                  <AlertCircle className="size-4 shrink-0" />
+                  <AlertDescription className="text-xs">{displayError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div>
+                <label className="block text-xs font-medium text-foreground mb-1.5">
+                  {t.login.apiKeyLabel}
+                </label>
+                <div className="relative flex items-center">
+                  <KeyRound className="absolute left-2.5 size-3.5 text-muted-foreground pointer-events-none" />
                   <input
-                    type="text"
-                    required
-                    value={setupData.name}
-                    onChange={(e) => setSetupData({ ...setupData, name: e.target.value })}
-                    className="w-full px-3 py-2 bg-muted/50 border border-border rounded-lg text-xs text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
-                    placeholder="Administrador"
+                    type={showPassword ? 'text' : 'password'}
+                    value={passkey}
+                    onChange={(e) => {
+                      setPasskey(e.target.value);
+                      if (localError) setLocalError(null);
+                    }}
+                    placeholder={t.login.apiKeyPlaceholder}
+                    disabled={isLoggingIn}
+                    autoFocus
+                    className="w-full h-9 pl-8 pr-9 rounded-lg bg-muted/50 border border-border text-xs text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    tabIndex={-1}
+                    className="absolute right-2.5 text-muted-foreground hover:text-foreground cursor-pointer focus:outline-hidden"
+                  >
+                    {showPassword ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                  </button>
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">
-                    {t.login.emailLabel}
-                  </label>
-                  <input
-                    type="email"
-                    required
-                    value={setupData.email}
-                    onChange={(e) => setSetupData({ ...setupData, email: e.target.value })}
-                    className="w-full px-3 py-2 bg-muted/50 border border-border rounded-lg text-xs text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
-                    placeholder="admin@edgekit.dev"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">
-                    {t.login.passwordLabel}
-                  </label>
-                  <input
-                    type="password"
-                    required
-                    minLength={8}
-                    value={setupData.password}
-                    onChange={(e) => setSetupData({ ...setupData, password: e.target.value })}
-                    className="w-full px-3 py-2 bg-muted/50 border border-border rounded-lg text-xs text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
-                    placeholder="••••••••"
-                  />
-                </div>
-              </CardContent>
-              <CardFooter>
-                <Button
-                  type="submit"
-                  disabled={performSetupMutation.isPending}
-                  className="w-full gap-1.5 text-xs h-9 cursor-pointer"
-                >
-                  <UserCheck className="size-3.5" />
-                  {performSetupMutation.isPending ? t.common.loading : t.login.setupSubmit}
-                </Button>
-              </CardFooter>
-            </form>
-          </Card>
-        ) : (
-          /* Formulário de Login com Service Role Key */
-          <Card className="shadow-lg">
-            <form onSubmit={handleLogin}>
-              <CardHeader className="space-y-1">
-                <CardTitle className="text-lg">{t.login.title}</CardTitle>
-                <CardDescription className="text-xs">
-                  {t.login.subtitle}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3.5">
-                <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">
-                    {t.login.apiKeyLabel}
-                  </label>
-                  <div className="relative flex items-center">
-                    <KeyRound className="absolute left-2.5 size-3.5 text-muted-foreground pointer-events-none" />
-                    <input
-                      type="password"
-                      value={apiKeyInput}
-                      onChange={(e) => setApiKeyInput(e.target.value)}
-                      placeholder={t.login.apiKeyPlaceholder}
-                      className="w-full h-9 pl-8 pr-3 rounded-lg bg-muted/50 border border-border text-xs text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
-                    />
-                  </div>
-                </div>
-              </CardContent>
-              <CardFooter>
-                <Button type="submit" className="w-full gap-1.5 text-xs h-9 cursor-pointer">
-                  <span>{t.login.submit}</span>
-                  <ArrowRight className="size-3.5" />
-                </Button>
-              </CardFooter>
-            </form>
-          </Card>
-        )}
+              </div>
+            </CardContent>
+
+            <CardFooter>
+              <Button
+                type="submit"
+                disabled={isLoggingIn || !passkey.trim()}
+                className="w-full gap-1.5 text-xs h-9 cursor-pointer"
+              >
+                {isLoggingIn ? (
+                  <>
+                    <Loader2 className="size-3.5 animate-spin" />
+                    <span>{t.common.loading}</span>
+                  </>
+                ) : (
+                  <>
+                    <span>{t.login.submit}</span>
+                    <ArrowRight className="size-3.5" />
+                  </>
+                )}
+              </Button>
+            </CardFooter>
+          </form>
+        </Card>
       </div>
     </div>
   );

@@ -10,6 +10,7 @@
     "dev:web": "pnpm --filter @edgekit/platform-web dev",
     "setup": "tsx scripts/setup.ts",
     "setup:local": "tsx scripts/setup.ts --local",
+    "setup:cf": "tsx scripts/setup-cloudflare.ts",
     "keys:generate": "tsx scripts/generate-keys.ts",
     "db:generate": "drizzle-kit generate && tsx scripts/bundle-d1-migrations.ts",
     "db:migrate:prod": "tsx scripts/migrate-d1-prod.ts",
