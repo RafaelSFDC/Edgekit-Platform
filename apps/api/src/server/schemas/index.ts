@@ -101,3 +101,24 @@ export const UpdateWebhookSchema = z.object({
 })
 
 export type UpdateWebhookInput = z.infer<typeof UpdateWebhookSchema>
+
+export const PolicyRuleTypeSchema = z.enum([
+  'disabled',
+  'public',
+  'authenticated',
+  'owner',
+  'org_member',
+  'custom_sql',
+])
+
+export const TablePolicyUpdateSchema = z.object({
+  rlsEnabled: z.boolean().optional(),
+  selectRule: PolicyRuleTypeSchema.optional(),
+  insertRule: PolicyRuleTypeSchema.optional(),
+  updateRule: PolicyRuleTypeSchema.optional(),
+  deleteRule: PolicyRuleTypeSchema.optional(),
+  ownerColumn: z.string().regex(SAFE_IDENTIFIER, 'Identificador de coluna inválido').optional(),
+  customRule: z.string().nullable().optional(),
+})
+
+export type TablePolicyUpdateInput = z.infer<typeof TablePolicyUpdateSchema>

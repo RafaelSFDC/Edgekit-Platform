@@ -6,7 +6,7 @@ import { en } from '../src/i18n/locales/en';
 async function verifyWebDashboard() {
   console.log('🚀 Iniciando validação estrutural do Frontend Edgekit Platform...');
 
-  // 1. Validar rota /login pública
+  // 1. Validar rotas públicas (/login e /setup)
   const routes = router.routesByPath as Record<string, any>;
   assert.ok(routes['/login'], 'A rota /login deve existir no router');
   assert.strictEqual(
@@ -15,6 +15,14 @@ async function verifyWebDashboard() {
     'A rota /login deve ser filha direta da raiz'
   );
   console.log('✅ Rota /login validada com sucesso fora do layout protegido');
+
+  assert.ok(routes['/setup'], 'A rota /setup deve existir no router');
+  assert.strictEqual(
+    routes['/setup'].parentRoute?.id,
+    '__root__',
+    'A rota /setup deve ser filha direta da raiz'
+  );
+  console.log('✅ Rota /setup validada com sucesso fora do layout protegido');
 
   // 2. Validar rotas protegidas da Dashboard
   const dashboardRoutes = ['/', '/database', '/auth', '/storage', '/realtime', '/settings'];
@@ -29,7 +37,19 @@ async function verifyWebDashboard() {
   }
   console.log('✅ Todas as rotas protegidas (/, /database, /auth, /storage, /realtime, /settings) pertencem a _dashboard');
 
-  // 3. Validar chaves de tradução
+  // 3. Validar exportação dos métodos essenciais do serviço de API
+  const apiServices = await import('../src/services/api');
+  assert.strictEqual(typeof apiServices.checkSetupStatus, 'function', 'checkSetupStatus deve ser uma função');
+  assert.strictEqual(typeof apiServices.performSetup, 'function', 'performSetup deve ser uma função');
+  assert.strictEqual(typeof apiServices.loginAdminCredentials, 'function', 'loginAdminCredentials deve ser uma função');
+  assert.strictEqual(typeof apiServices.loginAuth, 'function', 'loginAuth deve ser uma função');
+  assert.strictEqual(typeof apiServices.logoutAuth, 'function', 'logoutAuth deve ser uma função');
+  assert.strictEqual(typeof apiServices.fetchAuthMe, 'function', 'fetchAuthMe deve ser uma função');
+  assert.strictEqual(typeof apiServices.fetchTables, 'function', 'fetchTables deve ser uma função');
+  assert.strictEqual(typeof apiServices.runSql, 'function', 'runSql deve ser uma função');
+  console.log('✅ Métodos de comunicação da API do Dashboard Web validados!');
+
+  // 4. Validar chaves de tradução
   assert.ok(ptBR.overview.title, 'ptBR deve ter overview.title');
   assert.ok(ptBR.database.title, 'ptBR deve ter database.title');
   assert.ok(ptBR.storage.title, 'ptBR deve ter storage.title');

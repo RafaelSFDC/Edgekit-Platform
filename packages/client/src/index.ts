@@ -74,6 +74,21 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
       pendingSubscriptions.clear()
     }
 
+    sharedSocket.onclose = () => {
+      sharedSocket = null
+      if (activeChannels.size > 0 && typeof setTimeout !== 'undefined') {
+        setTimeout(() => {
+          if (activeChannels.size > 0 && !sharedSocket) {
+            getOrConnectSocket()
+          }
+        }, 1500)
+      }
+    }
+
+    sharedSocket.onerror = () => {
+      // Deixa o onclose cuidar do ciclo de reconexão
+    }
+
     sharedSocket.onmessage = (msg: any) => {
       try {
         const raw = typeof msg.data === 'string' ? msg.data : new TextDecoder().decode(msg.data)

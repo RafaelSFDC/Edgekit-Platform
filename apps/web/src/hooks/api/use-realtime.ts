@@ -7,10 +7,22 @@ export function useRealtimeStream(channel = 'global') {
   const [status, setStatus] = useState<'connected' | 'connecting' | 'disconnected'>('disconnected');
   const wsRef = useRef<WebSocket | null>(null);
 
+  const isUnmountedRef = useRef(false);
+  const reconnectTimeoutRef = useRef<any>(null);
+  const connectRef = useRef<() => void>(() => {});
+
   const connect = useCallback(() => {
     if (wsRef.current) {
-      wsRef.current.close();
+      try {
+        wsRef.current.close();
+      } catch {}
     }
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
+    if (isUnmountedRef.current) return;
 
     setStatus('connecting');
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -23,6 +35,10 @@ export function useRealtimeStream(channel = 'global') {
       const ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
+        if (isUnmountedRef.current) {
+          try { ws.close(); } catch {}
+          return;
+        }
         setStatus('connected');
         setMessages((prev) => [
           {
@@ -67,6 +83,13 @@ export function useRealtimeStream(channel = 'global') {
 
       ws.onclose = () => {
         setStatus('disconnected');
+        if (!isUnmountedRef.current) {
+          reconnectTimeoutRef.current = setTimeout(() => {
+            if (!isUnmountedRef.current) {
+              connectRef.current();
+            }
+          }, 2500);
+        }
       };
 
       wsRef.current = ws;
@@ -76,8 +99,17 @@ export function useRealtimeStream(channel = 'global') {
   }, [channel]);
 
   useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
+
+  useEffect(() => {
+    isUnmountedRef.current = false;
     connect();
     return () => {
+      isUnmountedRef.current = true;
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
       wsRef.current?.close();
     };
   }, [connect]);

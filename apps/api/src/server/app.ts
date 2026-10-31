@@ -82,12 +82,19 @@ app.get('/openapi.json', (c) => {
           responses: { '200': { description: 'Dados do usuário e permissões' } },
         },
       },
+      '/api/v1/auth/public-config': {
+        get: {
+          summary: 'Configurações públicas da aplicação (OAuth providers, anon key)',
+          responses: { '200': { description: 'Configurações públicas' } },
+        },
+      },
       '/api/v1/db/{table}': {
         get: {
           summary: 'Consultar registros de uma tabela com filtros dinâmicos',
           parameters: [
             { name: 'table', in: 'path', required: true, schema: { type: 'string' } },
             { name: 'select', in: 'query', schema: { type: 'string' }, description: 'Colunas separadas por vírgula' },
+            { name: 'expand', in: 'query', schema: { type: 'string' }, description: 'Relações a expandir' },
             { name: 'limit', in: 'query', schema: { type: 'integer' } },
             { name: 'offset', in: 'query', schema: { type: 'integer' } },
             { name: 'order', in: 'query', schema: { type: 'string' }, description: 'ex: created_at.desc' },
@@ -100,11 +107,81 @@ app.get('/openapi.json', (c) => {
           responses: { '201': { description: 'Registro criado' } },
         },
       },
+      '/api/v1/db/{table}/query': {
+        post: {
+          summary: 'Executar consulta declarativa estruturada (Zero-SQL)',
+          parameters: [{ name: 'table', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: { '200': { description: 'Resultados da consulta' } },
+        },
+      },
+      '/api/v1/db/{table}/{id}': {
+        get: {
+          summary: 'Obter registro específico por ID',
+          parameters: [
+            { name: 'table', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'expand', in: 'query', schema: { type: 'string' } },
+          ],
+          responses: { '200': { description: 'Registro encontrado' }, '404': { description: 'Não encontrado' } },
+        },
+        patch: {
+          summary: 'Atualizar registro específico por ID',
+          parameters: [
+            { name: 'table', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: { '200': { description: 'Registro atualizado' } },
+        },
+        delete: {
+          summary: 'Excluir registro por ID',
+          parameters: [
+            { name: 'table', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: { '200': { description: 'Registro excluído' } },
+        },
+      },
+      '/api/v1/db/batch': {
+        post: {
+          summary: 'Executar mutações atômicas transacionais em lote',
+          responses: { '200': { description: 'Operações executadas com sucesso' } },
+        },
+      },
+      '/api/v1/storage/{bucket}/list': {
+        get: {
+          summary: 'Listar arquivos em um bucket de storage',
+          parameters: [{ name: 'bucket', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: { '200': { description: 'Lista de arquivos' } },
+        },
+      },
       '/api/v1/storage/{bucket}/upload': {
         post: {
-          summary: 'Upload de arquivo para o R2',
+          summary: 'Upload de arquivo para o R2 com verificação de políticas',
           parameters: [{ name: 'bucket', in: 'path', required: true, schema: { type: 'string' } }],
           responses: { '201': { description: 'Metadados do arquivo enviado' } },
+        },
+      },
+      '/api/v1/storage/{bucket}/signed-url': {
+        post: {
+          summary: 'Gerar URL temporária pré-assinada com HMAC-SHA256',
+          parameters: [{ name: 'bucket', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: { '200': { description: 'URL assinada e expiração' } },
+        },
+      },
+      '/api/v1/storage/{bucket}/file/{path}': {
+        get: {
+          summary: 'Download ou streaming HTTP 206 de arquivo',
+          parameters: [
+            { name: 'bucket', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'path', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: { '200': { description: 'Arquivo completo' }, '206': { description: 'Partial content (streaming)' } },
+        },
+      },
+      '/api/v1/realtime/ws': {
+        get: {
+          summary: 'Handshake WebSocket multiplexado do Hub Realtime (Hibernation API)',
+          responses: { '101': { description: 'Switching Protocols para WebSocket' } },
         },
       },
       '/api/v1/realtime/{channel}/broadcast': {
@@ -112,6 +189,36 @@ app.get('/openapi.json', (c) => {
           summary: 'Enviar mensagem de broadcast em tempo real para um canal',
           parameters: [{ name: 'channel', in: 'path', required: true, schema: { type: 'string' } }],
           responses: { '200': { description: 'Mensagem transmitida' } },
+        },
+      },
+      '/api/v1/realtime/{channel}/presence': {
+        get: {
+          summary: 'Consultar presença e conexões ativas no canal',
+          parameters: [{ name: 'channel', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: { '200': { description: 'Lista de usuários conectados' } },
+        },
+      },
+      '/api/v1/webhooks': {
+        get: {
+          summary: 'Listar webhooks cadastrados (Admin / service_role)',
+          responses: { '200': { description: 'Lista de webhooks' } },
+        },
+        post: {
+          summary: 'Cadastrar novo webhook HTTP assinado',
+          responses: { '201': { description: 'Webhook criado' } },
+        },
+      },
+      '/api/v1/webhooks/{id}/test': {
+        post: {
+          summary: 'Testar disparo de webhook (Ping Test com assinatura HMAC e medição de latência)',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: { '200': { description: 'Resultado da entrega e latência' } },
+        },
+      },
+      '/api/v1/functions/status': {
+        get: {
+          summary: 'Consultar status e capacidades de Edge Functions',
+          responses: { '200': { description: 'Status das funções' } },
         },
       },
     },

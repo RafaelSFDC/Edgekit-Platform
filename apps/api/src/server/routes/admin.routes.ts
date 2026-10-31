@@ -29,7 +29,7 @@ import {
 } from '../auth/admin-auth'
 import { createApiKey, ensureDefaultKeys, validateApiKey } from '../auth/keys'
 import { getSecurityConfig, invalidateSecurityConfigCache, isLocalhostOrigin } from '../auth/security'
-import { AdminSetupSchema, AdminLoginSchema, CreateApiKeySchema } from '../schemas'
+import { AdminSetupSchema, AdminLoginSchema, CreateApiKeySchema, TablePolicyUpdateSchema } from '../schemas'
 import { invalidateTableColumnsCache } from './db.routes'
 
 export const adminRoutes = new Hono<AppEnv>()
@@ -947,16 +947,33 @@ adminRoutes.get('/tables/:name/policy', requireAdmin(), async (c) => {
 // Atualizar Política de Acesso da Tabela
 adminRoutes.put('/tables/:name/policy', requireAdmin(), async (c) => {
   const tableName = c.req.param('name').trim()
-  const body = await c.req.json().catch(() => ({}))
+  if (!SAFE_NAME.test(tableName)) {
+    return c.json({ success: false, error: { message: 'Nome de tabela inválido.' } }, 400)
+  }
 
-  const validRules = ['disabled', 'public', 'authenticated', 'owner', 'org_member', 'custom_sql']
-  const rlsEnabled = body.rlsEnabled !== undefined ? Boolean(body.rlsEnabled) : true
-  const selectRule = validRules.includes(body.selectRule) ? body.selectRule : 'disabled'
-  const insertRule = validRules.includes(body.insertRule) ? body.insertRule : 'disabled'
-  const updateRule = validRules.includes(body.updateRule) ? body.updateRule : 'disabled'
-  const deleteRule = validRules.includes(body.deleteRule) ? body.deleteRule : 'disabled'
-  const ownerColumn = (body.ownerColumn || 'user_id').trim().replace(/[^a-zA-Z0-9_]/g, '')
-  const customRule = body.customRule || null
+  const body = await c.req.json().catch(() => ({}))
+  const parsed = TablePolicyUpdateSchema.safeParse(body)
+  if (!parsed.success) {
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'INVALID_INPUT',
+          message: parsed.error.errors[0]?.message || 'Parâmetros de política inválidos.',
+        },
+      },
+      400,
+    )
+  }
+
+  const data = parsed.data
+  const rlsEnabled = data.rlsEnabled !== undefined ? data.rlsEnabled : true
+  const selectRule = data.selectRule || 'disabled'
+  const insertRule = data.insertRule || 'disabled'
+  const updateRule = data.updateRule || 'disabled'
+  const deleteRule = data.deleteRule || 'disabled'
+  const ownerColumn = (data.ownerColumn || 'user_id').trim()
+  const customRule = data.customRule || null
 
   const now = new Date()
   const db = await getDb()

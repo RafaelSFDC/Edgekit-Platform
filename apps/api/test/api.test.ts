@@ -1860,5 +1860,54 @@ describe('Edgekit Platform — Fundação, Segurança & Identidade Dupla (Fase 1
       const invalid = await verifyWebhookSignature(secret, tamperedPayload, signature)
       expect(invalid).toBe(false)
     })
+
+    it('Multi-Tenancy Zero-Trust: Política org_member isola estritamente dados pelo activeOrganizationId do token', () => {
+      const mockPolicy = {
+        id: 'pol_projects',
+        tableName: 'projects',
+        rlsEnabled: true,
+        selectRule: 'org_member',
+        insertRule: 'org_member',
+        updateRule: 'org_member',
+        deleteRule: 'org_member',
+        ownerColumn: 'organization_id',
+        customRule: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }
+
+      // 1. Usuário sem autenticação é bloqueado
+      const anonResult = evaluateTablePolicy('projects', 'select', mockPolicy, {
+        role: 'anon',
+      })
+      expect(anonResult.allowed).toBe(false)
+      expect(anonResult.error).toContain('Acesso restrito: faça login')
+
+      // 2. Usuário logado mas sem organização ativa no token é bloqueado
+      const noOrgContext: AppVariables = {
+        role: 'user',
+        user: { id: 'usr_no_org', name: 'Sem Org', email: 'no_org@test.dev' } as any,
+        session: { id: 'sess_1', userId: 'usr_no_org' } as any,
+      }
+      const noOrgResult = evaluateTablePolicy('projects', 'select', mockPolicy, noOrgContext)
+      expect(noOrgResult.allowed).toBe(false)
+      expect(noOrgResult.error).toContain('Nenhuma organização ativa selecionada')
+
+      // 3. Usuário logado com Org A gera WHERE organization_id = 'org_tenant_A' e injeta organization_id
+      const orgAContext: AppVariables = {
+        role: 'user',
+        user: { id: 'usr_org_A', name: 'Membro Org A', email: 'userA@test.dev' } as any,
+        session: { id: 'sess_A', userId: 'usr_org_A', activeOrganizationId: 'org_tenant_A' } as any,
+      }
+      const orgAResult = evaluateTablePolicy('projects', 'select', mockPolicy, orgAContext)
+      expect(orgAResult.allowed).toBe(true)
+      expect(orgAResult.whereCondition).toBeDefined()
+      expect(orgAResult.injectValues).toEqual({ organization_id: 'org_tenant_A' })
+
+      // 4. Injeção obrigatória na inserção para impedir usurpação de tenant
+      const insertResult = evaluateTablePolicy('projects', 'insert', mockPolicy, orgAContext)
+      expect(insertResult.allowed).toBe(true)
+      expect(insertResult.injectValues?.organization_id).toBe('org_tenant_A')
+    })
   })
 })
