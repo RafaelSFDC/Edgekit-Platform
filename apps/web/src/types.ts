@@ -69,6 +69,7 @@ export interface TablePolicy {
   ownerColumn?: string;
   readLevel?: string;
   writeLevel?: string;
+  customRule?: string;
 }
 
 export interface SecuritySettings {

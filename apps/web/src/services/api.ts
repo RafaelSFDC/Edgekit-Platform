@@ -112,10 +112,12 @@ export async function performSetup(data: {
   name: string;
   email: string;
   password: string;
+  setupToken?: string;
 }): Promise<any> {
   const res = await fetch(`${API_BASE}/api/v1/admin/setup`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     body: JSON.stringify(data),
   });
 
@@ -124,6 +126,31 @@ export async function performSetup(data: {
     throw new ApiError(json.error?.message || 'Falha ao executar o setup inicial.', res.status);
   }
   return json;
+}
+
+export async function loginAdminCredentials(credentials: {
+  email: string;
+  password: string;
+}): Promise<{ authenticated: boolean; role?: string; admin?: any }> {
+  const res = await fetch(`${API_BASE}/api/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({
+      email: credentials.email.trim().toLowerCase(),
+      password: credentials.password,
+    }),
+  });
+
+  const json = await res.json().catch(() => ({ authenticated: false }));
+  if (!res.ok || !json.authenticated) {
+    throw new ApiError(
+      json.error?.message || 'Credenciais de administrador inválidas.',
+      res.status
+    );
+  }
+
+  return { authenticated: true, role: json.role, admin: json.data?.admin };
 }
 
 export async function fetchStats(): Promise<PlatformStats> {
@@ -158,6 +185,11 @@ export async function createTable(data: {
     primaryKey?: boolean;
     notNull?: boolean;
     defaultValue?: string;
+    references?: {
+      table: string;
+      column?: string;
+      onDelete?: 'CASCADE' | 'SET NULL' | 'RESTRICT' | 'NO ACTION';
+    };
   }>;
 }): Promise<any> {
   const res = await fetch(`${API_BASE}/api/v1/admin/tables`, {

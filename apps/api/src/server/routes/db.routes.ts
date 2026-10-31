@@ -19,11 +19,15 @@ const SYSTEM_TABLES = new Set([
   'organizations',
   'members',
   'invitations',
+  'two_factors',
+  'passkeys',
+  'jwks',
   'sqlite_master',
   'sqlite_sequence',
   'drizzle_migrations',
   '_ek_migrations',
   '__d1_migrations',
+  '__honobase_migrations',
 ])
 
 function sanitizeIdentifier(name: string): string {
@@ -43,9 +47,13 @@ async function resolveTableAccessWithEngine(
 
   const lowerTable = table.toLowerCase()
   const role = c.get('role')
-  const isPlatformAdmin = role === 'service_role' || role === 'owner' || role === 'admin' || Boolean(c.get('admin'))
+  const apiKey = c.get('apiKey')
+  const isPlatformAdmin =
+    Boolean(c.get('admin')) ||
+    apiKey?.type === 'service_role' ||
+    role === 'service_role'
 
-  // Tabelas de infraestrutura interna (_ek_*) só podem ser lidas via service_role ou admin do painel
+  // Tabelas de infraestrutura interna (_ek_*) e Better Auth só podem ser lidas via service_role ou admin do painel
   if (lowerTable.startsWith('_ek_') || SYSTEM_TABLES.has(lowerTable)) {
     if (!isPlatformAdmin) {
       throw new Error(
@@ -76,6 +84,81 @@ async function resolveTableAccessWithEngine(
   }
 
   return result
+}
+
+/**
+ * Expande relacionamentos de forma declarativa e parametrizada (PocketBase / Supabase style)
+ */
+async function expandRelations(
+  db: AppDatabase,
+  table: string,
+  rows: any[],
+  expandParam?: string | string[],
+): Promise<any[]> {
+  if (!rows || rows.length === 0 || !expandParam) return rows
+
+  const requested = Array.isArray(expandParam)
+    ? expandParam
+    : String(expandParam).split(',').map((s) => s.trim()).filter(Boolean)
+
+  if (requested.length === 0) return rows
+
+  let fkList: Array<{ table: string; from: string; to: string }> = []
+  try {
+    const rawFks: any = await db.all(sql.raw(`PRAGMA foreign_key_list(\`${table}\`)`))
+    if (Array.isArray(rawFks)) {
+      fkList = rawFks.map((fk: any) => ({
+        table: fk.table,
+        from: fk.from,
+        to: fk.to || 'id',
+      }))
+    }
+  } catch {}
+
+  for (const exp of requested) {
+    const [fromCol, explicitTarget] = exp.split(':')
+    if (!SAFE_IDENTIFIER.test(fromCol)) continue
+
+    const knownFk = fkList.find((f) => f.from.toLowerCase() === fromCol.toLowerCase())
+    let targetTable = explicitTarget || knownFk?.table
+    const targetCol = knownFk?.to || 'id'
+
+    if (!targetTable) {
+      if (fromCol.toLowerCase().endsWith('_id')) {
+        const base = fromCol.slice(0, -3)
+        targetTable = base.endsWith('s') ? base : `${base}s`
+      } else {
+        targetTable = fromCol
+      }
+    }
+
+    if (!SAFE_IDENTIFIER.test(targetTable)) continue
+
+    const ids = Array.from(new Set(rows.map((r) => r[fromCol]).filter(Boolean)))
+    if (ids.length === 0) continue
+
+    try {
+      const relQuery = sql`SELECT * FROM ${sql.raw(`\`${targetTable}\``)} WHERE ${sql.raw(`\`${targetCol}\``)} IN (${sql.join(ids.map((id) => sql`${id}`), sql.raw(', '))})`
+      const relRows: any[] = await db.all(relQuery)
+      const lookup = new Map<any, any>()
+      for (const r of relRows) {
+        lookup.set(String(r[targetCol]), r)
+      }
+
+      const propName = fromCol.endsWith('_id') ? fromCol.slice(0, -3) : `${fromCol}_data`
+      for (const row of rows) {
+        const foreignVal = row[fromCol]
+        const matched = foreignVal ? lookup.get(String(foreignVal)) || null : null
+        row.expand = row.expand || {}
+        row.expand[fromCol] = matched
+        row[propName] = matched
+      }
+    } catch {
+      // Ignora erro caso tabela alvo não esteja disponível
+    }
+  }
+
+  return rows
 }
 
 async function broadcastDatabaseEvent(
@@ -125,7 +208,7 @@ async function broadcastDatabaseEvent(
   }
 }
 
-// REST Data API: Consulta dinâmica com filtros avançados e Policy Engine
+// REST Data API: Consulta dinâmica com filtros avançados, Policy Engine e Expansão de Relações
 dbRoutes.get('/:table', async (c) => {
   const table = c.req.param('table')
   const runtime = await getDatabaseRuntime()
@@ -147,6 +230,7 @@ dbRoutes.get('/:table', async (c) => {
 
   const query = c.req.query()
   const selectParam = query['select'] || '*'
+  const expandParam = query['expand']
   const limitParam = Math.min(Math.max(Number(query['limit']) || 50, 1), 500)
   const offsetParam = Math.max(Number(query['offset']) || 0, 0)
   const orderParam = query['order']
@@ -167,7 +251,7 @@ dbRoutes.get('/:table', async (c) => {
     whereConditions.push(policyResult.whereCondition)
   }
 
-  const reservedParams = new Set(['select', 'limit', 'offset', 'order', 'apikey'])
+  const reservedParams = new Set(['select', 'limit', 'offset', 'order', 'apikey', 'expand'])
 
   for (const [key, value] of Object.entries(query)) {
     if (reservedParams.has(key) || !value) continue
@@ -235,12 +319,13 @@ dbRoutes.get('/:table', async (c) => {
     const finalSql = sql.join(queryChunks, sql.raw(''))
     const finalCountSql = sql.join(countChunks, sql.raw(''))
 
-    const [rows, countResult]: [any[], any] = await Promise.all([
+    const [rawRows, countResult]: [any[], any] = await Promise.all([
       db.all(finalSql),
       db.all(finalCountSql),
     ])
 
-    const total = countResult?.[0]?.total ?? rows.length
+    const total = countResult?.[0]?.total ?? rawRows.length
+    const rows = await expandRelations(db, table, rawRows, expandParam)
 
     return c.json({
       success: true,
@@ -266,10 +351,159 @@ dbRoutes.get('/:table', async (c) => {
   }
 })
 
-// Obter registro único por ID com Policy Engine
+// Endpoint Declarativo Estruturado de Consulta (Zero-Raw SQL no Frontend)
+dbRoutes.post('/:table/query', async (c) => {
+  const table = c.req.param('table')
+  const runtime = await getDatabaseRuntime()
+  const db = runtime.db
+
+  let policyResult: PolicyEvaluationResult
+  try {
+    policyResult = await resolveTableAccessWithEngine(db, table, c, 'select')
+  } catch (err: any) {
+    const isForbidden = err.message?.includes('Acesso negado') || err.message?.includes('Acesso restrito')
+    return c.json(
+      {
+        success: false,
+        error: { message: err.message, code: isForbidden ? 'FORBIDDEN_TABLE' : 'UNAUTHORIZED' },
+      },
+      isForbidden ? 403 : 401,
+    )
+  }
+
+  const body = await c.req.json().catch(() => ({}))
+  const selectArr: string[] = Array.isArray(body.select) ? body.select : (typeof body.select === 'string' && body.select !== '*' ? body.select.split(',').map((s: string) => s.trim()) : [])
+  const whereArr: Array<{ field: string; op: string; value: any }> = Array.isArray(body.where) ? body.where : []
+  const expandParam = body.expand
+  const limitParam = Math.min(Math.max(Number(body.limit) || 50, 1), 500)
+  const offsetParam = Math.max(Number(body.offset) || 0, 0)
+  const orderByArr: Array<{ field: string; direction?: string }> = Array.isArray(body.orderBy) ? body.orderBy : []
+
+  let selectClause = '*'
+  if (selectArr.length > 0) {
+    for (const col of selectArr) {
+      sanitizeIdentifier(col)
+    }
+    selectClause = selectArr.map((col) => `\`${col}\``).join(', ')
+  }
+
+  const whereConditions: SQL[] = []
+  if (policyResult.whereCondition) {
+    whereConditions.push(policyResult.whereCondition)
+  }
+
+  for (const item of whereArr) {
+    if (!item.field || !SAFE_IDENTIFIER.test(item.field)) continue
+    const colIdentifier = sql.raw(`\`${item.field}\``)
+    const op = (item.op || 'eq').toLowerCase()
+    const val = item.value
+
+    switch (op) {
+      case 'eq':
+        whereConditions.push(sql`${colIdentifier} = ${val}`)
+        break
+      case 'neq':
+        whereConditions.push(sql`${colIdentifier} != ${val}`)
+        break
+      case 'gt':
+        whereConditions.push(sql`${colIdentifier} > ${val}`)
+        break
+      case 'gte':
+        whereConditions.push(sql`${colIdentifier} >= ${val}`)
+        break
+      case 'lt':
+        whereConditions.push(sql`${colIdentifier} < ${val}`)
+        break
+      case 'lte':
+        whereConditions.push(sql`${colIdentifier} <= ${val}`)
+        break
+      case 'like':
+        whereConditions.push(sql`${colIdentifier} LIKE ${val}`)
+        break
+      case 'in': {
+        const items = Array.isArray(val) ? val : [val]
+        if (items.length > 0) {
+          whereConditions.push(sql`${colIdentifier} IN (${sql.join(items.map((i) => sql`${i}`), sql.raw(', '))})`)
+        }
+        break
+      }
+      case 'not_in': {
+        const items = Array.isArray(val) ? val : [val]
+        if (items.length > 0) {
+          whereConditions.push(sql`${colIdentifier} NOT IN (${sql.join(items.map((i) => sql`${i}`), sql.raw(', '))})`)
+        }
+        break
+      }
+      case 'is_null':
+        whereConditions.push(sql`${colIdentifier} IS NULL`)
+        break
+      case 'is_not_null':
+        whereConditions.push(sql`${colIdentifier} IS NOT NULL`)
+        break
+      default:
+        whereConditions.push(sql`${colIdentifier} = ${val}`)
+        break
+    }
+  }
+
+  const queryChunks = [sql.raw(`SELECT ${selectClause} FROM \`${table}\``)]
+  const countChunks = [sql.raw(`SELECT COUNT(*) as total FROM \`${table}\``)]
+
+  if (whereConditions.length > 0) {
+    const whereJoined = sql.join(whereConditions, sql.raw(' AND '))
+    queryChunks.push(sql.raw(' WHERE '), whereJoined)
+    countChunks.push(sql.raw(' WHERE '), whereJoined)
+  }
+
+  if (orderByArr.length > 0) {
+    const orderSqlParts = orderByArr.map((o) => {
+      sanitizeIdentifier(o.field)
+      const dir = (o.direction || 'asc').toLowerCase() === 'desc' ? 'DESC' : 'ASC'
+      return sql.raw(`\`${o.field}\` ${dir}`)
+    })
+    queryChunks.push(sql.raw(' ORDER BY '), sql.join(orderSqlParts, sql.raw(', ')))
+  }
+
+  queryChunks.push(sql.raw(` LIMIT ${limitParam} OFFSET ${offsetParam}`))
+
+  try {
+    const finalSql = sql.join(queryChunks, sql.raw(''))
+    const finalCountSql = sql.join(countChunks, sql.raw(''))
+
+    const [rawRows, countResult]: [any[], any] = await Promise.all([
+      db.all(finalSql),
+      db.all(finalCountSql),
+    ])
+
+    const total = countResult?.[0]?.total ?? rawRows.length
+    const rows = await expandRelations(db, table, rawRows, expandParam)
+
+    return c.json({
+      success: true,
+      data: rows,
+      meta: {
+        total: Number(total),
+        limit: limitParam,
+        offset: offsetParam,
+        hasMore: offsetParam + rows.length < Number(total),
+      },
+    })
+  } catch (err: any) {
+    return c.json(
+      {
+        success: false,
+        error: { code: 'DB_QUERY_ERROR', message: err.message },
+      },
+      500,
+    )
+  }
+})
+
+// Obter registro único por ID com Policy Engine e Expansão de Relações
 dbRoutes.get('/:table/:id', async (c) => {
   const table = c.req.param('table')
   const id = c.req.param('id')
+  const expandParam = c.req.query('expand')
   const runtime = await getDatabaseRuntime()
   const db = runtime.db
 
@@ -284,8 +518,8 @@ dbRoutes.get('/:table/:id', async (c) => {
     const whereClause = sql.join(whereConditions, sql.raw(' AND '))
     const query = sql`SELECT * FROM ${sql.raw(`\`${table}\``)} WHERE ${whereClause} LIMIT 1`
 
-    const rows: any[] = await db.all(query)
-    if (!rows || rows.length === 0) {
+    const rawRows: any[] = await db.all(query)
+    if (!rawRows || rawRows.length === 0) {
       return c.json(
         {
           success: false,
@@ -295,6 +529,7 @@ dbRoutes.get('/:table/:id', async (c) => {
       )
     }
 
+    const rows = await expandRelations(db, table, rawRows, expandParam)
     return c.json({ success: true, data: rows[0] })
   } catch (err: any) {
     const isForbidden = err.message?.includes('Acesso negado') || err.message?.includes('Acesso restrito')
@@ -308,10 +543,8 @@ dbRoutes.get('/:table/:id', async (c) => {
 async function executeBatchQueries(db: AppDatabase, queries: SQL[]): Promise<any[]> {
   if (queries.length === 0) return []
   if (typeof (db as any).batch === 'function') {
-    // Cloudflare D1 nativo via Drizzle D1
     return await (db as any).batch(queries)
   }
-  // Better-SQLite3 em modo transacional atômico síncrono
   const results: any[] = []
   if (typeof (db as any).transaction === 'function') {
     ;(db as any).transaction((tx: any) => {
@@ -335,7 +568,7 @@ async function executeBatchQueries(db: AppDatabase, queries: SQL[]): Promise<any
   return results
 }
 
-// Mutações Atômicas Transacionais em Lote (Batch API com db.batch)
+// Mutações Atômicas Transacionais em Lote (Batch API com db.batch e Anti-Hijack Guardrail)
 dbRoutes.post('/batch', async (c) => {
   const runtime = await getDatabaseRuntime()
   const db = runtime.db
@@ -363,6 +596,7 @@ dbRoutes.post('/batch', async (c) => {
       const table = sanitizeIdentifier(op.table)
       const action = op.type.toLowerCase() as CrudAction
       const access = await resolveTableAccessWithEngine(db, table, c, action)
+      const isPlatformAdmin = Boolean(access.bypass)
 
       if (action === 'insert') {
         const record = { ...op.data }
@@ -392,6 +626,18 @@ dbRoutes.post('/batch', async (c) => {
         }
         const data = { ...op.data }
         delete data.id
+
+        // Anti-Hijacking Guardrail: Não permite que usuários comuns alterem o autor/organização
+        if (!isPlatformAdmin) {
+          delete data['user_id']
+          delete data['organization_id']
+          if (access.injectValues) {
+            for (const k of Object.keys(access.injectValues)) {
+              delete data[k]
+            }
+          }
+        }
+
         const keys = Object.keys(data)
         for (const k of keys) {
           sanitizeIdentifier(k)
@@ -424,7 +670,6 @@ dbRoutes.post('/batch', async (c) => {
       }
     }
 
-    // Execução atômica no D1 / SQLite
     const rawResults = await executeBatchQueries(db, queries)
 
     // Emissão CDC para cada registro modificado
@@ -496,11 +741,9 @@ dbRoutes.post('/:table', async (c) => {
       preparedRecords.push(row)
     }
 
-    // Executa mutações atômicas via db.batch
     const rawBatch = await executeBatchQueries(db, queries)
     const results = rawBatch.map((resArr, idx) => (Array.isArray(resArr) ? resArr[0] : resArr) || preparedRecords[idx])
 
-    // Emissão CDC para cada registro inserido
     for (const item of results) {
       await broadcastDatabaseEvent(c, table, 'INSERT', item)
     }
@@ -521,7 +764,7 @@ dbRoutes.post('/:table', async (c) => {
   }
 })
 
-// Atualizar registro por ID com Policy Engine e CDC Broadcast
+// Atualizar registro por ID com Anti-Hijack Guardrail, Policy Engine e CDC Broadcast
 dbRoutes.patch('/:table/:id', async (c) => {
   const table = c.req.param('table')
   const id = c.req.param('id')
@@ -530,10 +773,24 @@ dbRoutes.patch('/:table/:id', async (c) => {
 
   try {
     const access = await resolveTableAccessWithEngine(db, table, c, 'update')
+    const isPlatformAdmin = Boolean(access.bypass)
 
     const body = await c.req.json().catch(() => ({}))
-    const keys = Object.keys(body).filter((k) => k !== 'id')
+    const data = { ...body }
+    delete data.id
 
+    // Anti-Hijacking Guardrail: Não permite que usuários comuns alterem o autor/organização
+    if (!isPlatformAdmin) {
+      delete data['user_id']
+      delete data['organization_id']
+      if (access.injectValues) {
+        for (const k of Object.keys(access.injectValues)) {
+          delete data[k]
+        }
+      }
+    }
+
+    const keys = Object.keys(data)
     if (keys.length === 0) {
       return c.json({ success: false, error: { message: 'Campos vazios para atualização.' } }, 400)
     }
@@ -543,7 +800,7 @@ dbRoutes.patch('/:table/:id', async (c) => {
     }
 
     const setClauses = sql.join(
-      keys.map((k) => sql`${sql.raw(`\`${k}\``)} = ${body[k]}`),
+      keys.map((k) => sql`${sql.raw(`\`${k}\``)} = ${data[k]}`),
       sql.raw(', '),
     )
 

@@ -35,6 +35,10 @@ async function setup() {
       `BETTER_AUTH_SECRET=${keys.betterAuthSecret}`,
     )
     template = template.replace(
+      /SETUP_TOKEN=.*/,
+      `SETUP_TOKEN=${keys.setupToken}`,
+    )
+    template = template.replace(
       /EDGEKIT_ANON_KEY=.*/,
       `EDGEKIT_ANON_KEY=${keys.anonKey}`,
     )

@@ -41,7 +41,10 @@ export class RealtimeDurableObject extends DurableObject {
 
       const initialChannels: string[] = []
       if (initialChannel && initialChannel.trim()) {
-        initialChannels.push(initialChannel.trim())
+        const clean = initialChannel.trim()
+        if (!clean.startsWith('_ek_')) {
+          initialChannels.push(clean)
+        }
       }
 
       // Preservação de presença em hibernação: uso obrigatório de serializeAttachment
@@ -131,6 +134,17 @@ export class RealtimeDurableObject extends DurableObject {
         const channelToSub = parsed.channel
         if (channelToSub && typeof channelToSub === 'string') {
           const cleanChannel = channelToSub.trim()
+          if (cleanChannel.startsWith('_ek_')) {
+            ws.send(
+              JSON.stringify({
+                error: 'FORBIDDEN_CHANNEL',
+                message: 'Assinatura em canais do sistema (_ek_*) é proibida.',
+                channel: cleanChannel,
+              }),
+            )
+            return
+          }
+
           if (!session.channels.includes(cleanChannel)) {
             session.channels.push(cleanChannel)
             ;(ws as any).serializeAttachment(session)

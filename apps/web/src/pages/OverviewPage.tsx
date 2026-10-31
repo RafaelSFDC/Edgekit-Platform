@@ -32,10 +32,11 @@ const client = createEdgekitClient({
   anonKey: 'sua-chave-anon-aqui'
 })
 
-// Consultar dados tipados no Cloudflare D1
+// Consultar dados tipados com expansão de relações no Cloudflare D1
 const { data, error } = await client
-  .from('users')
-  .select('id, name, email')
+  .from('articles')
+  .select('id, title, user_id')
+  .expand('user_id')
   .limit(10)
   .execute()`;
 

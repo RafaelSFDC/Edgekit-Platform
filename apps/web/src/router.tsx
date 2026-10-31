@@ -8,6 +8,7 @@ import {
 } from '@tanstack/react-router';
 import { DashboardLayout } from './components/layout/DashboardLayout';
 import { LoginPage } from './pages/LoginPage';
+import { SetupPage } from './pages/SetupPage';
 import { OverviewPage } from './pages/OverviewPage';
 import { DatabasePage } from './pages/DatabasePage';
 import { AuthPage } from './pages/AuthPage';
@@ -18,7 +19,7 @@ import { useAuth } from './context/auth-context';
 import { EdgekitLogo } from './components/common/EdgekitLogo';
 
 const DashboardGuard: React.FC = () => {
-  const { isAuthenticated, isLoading, isSetupComplete: _isSetupComplete } = useAuth();
+  const { isAuthenticated, isLoading, isSetupComplete } = useAuth();
 
   if (isLoading) {
     return (
@@ -29,6 +30,10 @@ const DashboardGuard: React.FC = () => {
         <p className="text-xs text-muted-foreground animate-pulse">Carregando Edgekit Platform...</p>
       </div>
     );
+  }
+
+  if (!isSetupComplete) {
+    return <Navigate to="/setup" replace />;
   }
 
   if (!isAuthenticated) {
@@ -46,6 +51,12 @@ const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
   component: LoginPage,
+});
+
+const setupRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/setup',
+  component: SetupPage,
 });
 
 const dashboardRoute = createRoute({
@@ -92,6 +103,7 @@ const settingsRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
+  setupRoute,
   dashboardRoute.addChildren([
     indexRoute,
     databaseRoute,

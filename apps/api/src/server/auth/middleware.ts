@@ -5,13 +5,14 @@ import { getDatabaseRuntime } from '../db'
 import { getSessionFromHeaders } from './index'
 import { validateApiKey } from './keys'
 import { ADMIN_COOKIE_NAME, validateAdminSession } from './admin-auth'
+import { getSecurityConfig } from './security'
 
 export function authContextMiddleware(): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const runtime = await getDatabaseRuntime()
     const db = runtime.db
 
-    // 1. Checa Sessão Administrativa do Painel (Cookie HttpOnly)
+    // 1. Checa Sessão Administrativa do Painel (Cookie HttpOnly edgekit_admin_session)
     const adminSessionToken = getCookie(c, ADMIN_COOKIE_NAME)
     if (adminSessionToken) {
       const admin = await validateAdminSession(db, adminSessionToken)
@@ -43,11 +44,40 @@ export function authContextMiddleware(): MiddlewareHandler<AppEnv> {
     if (candidateApiKey) {
       const validatedKey = await validateApiKey(db, candidateApiKey)
       if (validatedKey) {
-        c.set('apiKey', validatedKey)
+        // Regra Canônica 4.3: Chave de Serviço (service_role) rejeita origens de navegadores não autorizados
         if (validatedKey.type === 'service_role') {
+          const originHeader = c.req.header('origin')
+          if (originHeader) {
+            const isLocalOrigin =
+              originHeader.includes('localhost') ||
+              originHeader.includes('127.0.0.1')
+            const config = await getSecurityConfig()
+            const isExplicitlyAllowed =
+              Boolean(config.allowedOrigins &&
+              (config.allowedOrigins.includes(originHeader) ||
+                config.allowedOrigins.some((allowed) => allowed !== '*' && originHeader.startsWith(allowed))))
+
+            if (!isLocalOrigin && !isExplicitlyAllowed) {
+              return c.json(
+                {
+                  success: false,
+                  error: {
+                    code: 'FORBIDDEN_SERVICE_ROLE_BROWSER',
+                    message:
+                      'Chave service_role é de uso exclusivo em scripts de backend e não é permitida a partir desta origem de navegador.',
+                  },
+                },
+                403,
+              )
+            }
+          }
+          c.set('apiKey', validatedKey)
           c.set('role', 'service_role')
-        } else if (!c.get('role')) {
-          c.set('role', 'anon')
+        } else {
+          c.set('apiKey', validatedKey)
+          if (!c.get('role')) {
+            c.set('role', 'anon')
+          }
         }
       }
     }
@@ -56,8 +86,8 @@ export function authContextMiddleware(): MiddlewareHandler<AppEnv> {
     if (!c.get('admin') && c.get('role') !== 'service_role') {
       const sessionData = await getSessionFromHeaders(c.req.raw.headers)
       if (sessionData?.user) {
-        c.set('user', sessionData.user)
-        c.set('session', sessionData.session)
+        c.set('user', sessionData.user as any)
+        c.set('session', sessionData.session as any)
         // Usuário final autenticado no app prevalece sobre role 'anon' da chave pública
         c.set('role', 'user')
       }
@@ -73,20 +103,19 @@ export function authContextMiddleware(): MiddlewareHandler<AppEnv> {
 }
 
 /**
- * Exige que a requisição seja feita por um Administrador da Plataforma (membro em _ek_admins)
+ * Exige que a requisição seja feita por um Administrador da Plataforma (membro em _ek_admins via cookie HttpOnly)
  * ou por um backend autorizado utilizando a chave secreta (service_role).
  *
- * CRÍTICO: Um usuário final cadastrado na tabela `users` do app NUNCA passa nesta checagem!
+ * CRÍTICO: Um usuário final cadastrado na tabela `users` do app NUNCA passa nesta checagem,
+ * mesmo que seu atributo role no app seja 'admin'!
  */
 export function requireAdmin(): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const admin = c.get('admin')
     const apiKey = c.get('apiKey')
-    const role = c.get('role')
 
     const isPlatformAdmin =
       Boolean(admin) ||
-      role === 'service_role' ||
       apiKey?.type === 'service_role'
 
     if (!isPlatformAdmin) {
@@ -114,12 +143,10 @@ export function requireAuth(): MiddlewareHandler<AppEnv> {
     const admin = c.get('admin')
     const user = c.get('user')
     const apiKey = c.get('apiKey')
-    const role = c.get('role')
 
     const isAuthenticated =
       Boolean(admin) ||
       Boolean(user) ||
-      role === 'service_role' ||
       apiKey?.type === 'service_role'
 
     if (!isAuthenticated) {

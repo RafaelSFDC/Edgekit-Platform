@@ -1,14 +1,24 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { STORAGE_KEY_ADMIN, fetchAuthMe, loginAuth, logoutAuth } from '../services/api';
+import {
+  STORAGE_KEY_ADMIN,
+  fetchAuthMe,
+  loginAuth,
+  loginAdminCredentials,
+  logoutAuth,
+  checkSetupStatus,
+} from '../services/api';
+import type { AdminUser } from '../types';
 
 interface AuthContextValue {
   isAuthenticated: boolean;
   isLoading: boolean;
   isLoggingIn: boolean;
   isSetupComplete: boolean;
+  admin: AdminUser | null;
   apiKey: string | null;
   error: string | null;
   login: (key: string) => Promise<boolean>;
+  loginWithCredentials: (credentials: { email: string; password: string }) => Promise<boolean>;
   logout: () => Promise<void>;
   checkSetup: () => Promise<void>;
 }
@@ -17,17 +27,31 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [apiKey, setApiKey] = useState<string | null>(null);
+  const [admin, setAdmin] = useState<AdminUser | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const [isSetupComplete] = useState<boolean>(true);
+  const [isSetupComplete, setIsSetupComplete] = useState<boolean>(true);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   const checkAuth = useCallback(async () => {
     try {
+      // 1. Verifica status do setup da plataforma
+      try {
+        const setup = await checkSetupStatus();
+        setIsSetupComplete(setup.isSetupComplete);
+      } catch {
+        // Se falhar a verificação de setup, assume completo por segurança
+        setIsSetupComplete(true);
+      }
+
+      // 2. Verifica se já existe sessão válida (via cookie HttpOnly ou apikey)
       const res = await fetchAuthMe();
       if (res.authenticated) {
         setIsAuthenticated(true);
+        if (res.data?.admin) {
+          setAdmin(res.data.admin);
+        }
       } else {
         // Fallback: se há chave no localStorage, tenta auto-login
         const savedKey =
@@ -43,16 +67,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               setIsAuthenticated(true);
             } else {
               setIsAuthenticated(false);
+              setAdmin(null);
             }
           } catch {
             setIsAuthenticated(false);
+            setAdmin(null);
           }
         } else {
           setIsAuthenticated(false);
+          setAdmin(null);
         }
       }
     } catch {
       setIsAuthenticated(false);
+      setAdmin(null);
     } finally {
       setIsLoading(false);
     }
@@ -83,9 +111,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const loginWithCredentials = async (credentials: {
+    email: string;
+    password: string;
+  }): Promise<boolean> => {
+    setIsLoggingIn(true);
+    setError(null);
+    try {
+      const res = await loginAdminCredentials(credentials);
+      if (res.authenticated) {
+        setIsAuthenticated(true);
+        if (res.admin) {
+          setAdmin(res.admin);
+        }
+        return true;
+      }
+      setError('Credenciais de administrador inválidas.');
+      return false;
+    } catch (err: any) {
+      const msg = err.message || 'Falha ao autenticar com as credenciais informadas.';
+      setError(msg);
+      return false;
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
   const logout = async () => {
     await logoutAuth();
     setApiKey(null);
+    setAdmin(null);
     setIsAuthenticated(false);
   };
 
@@ -96,9 +151,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isLoading,
         isLoggingIn,
         isSetupComplete,
+        admin,
         apiKey,
         error,
         login,
+        loginWithCredentials,
         logout,
         checkSetup: checkAuth,
       }}

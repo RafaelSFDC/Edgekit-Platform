@@ -45,7 +45,10 @@ const SYSTEM_TABLES = new Set([
   'organizations',
   'members',
   'invitations',
-  '__honobase_migrations',
+  'two_factors',
+  'passkeys',
+  'jwks',
+  '_ek_migrations',
   '__d1_migrations',
   'drizzle_migrations',
   'sqlite_master',
@@ -273,6 +276,7 @@ export const DatabasePage: React.FC = () => {
       <CreateTableDialog
         open={isCreateOpen}
         onOpenChange={setIsCreateOpen}
+        availableTables={tables.map((t) => t.name)}
         onCreateTable={handleCreateTable}
       />
 

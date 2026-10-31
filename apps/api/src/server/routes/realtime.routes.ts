@@ -15,25 +15,31 @@ async function handleWebSocketUpgrade(c: Context<AppEnv>, defaultChannel?: strin
   }
 
   const user = c.get('user')
-  const incomingUrl = new URL(c.req.url)
   const target = new URL(c.req.url)
 
   if (defaultChannel) {
+    if (defaultChannel.startsWith('_ek_') || defaultChannel.startsWith('db:')) {
+      return c.json(
+        {
+          success: false,
+          error: {
+            code: 'FORBIDDEN_CHANNEL',
+            message: 'Acesso a canais internos do sistema (_ek_*, db:*) é restrito.',
+          },
+        },
+        403,
+      )
+    }
     target.searchParams.set('channel', defaultChannel)
   }
 
+  // Zero-Trust: Identidade de presença é derivada exclusivamente do token autenticado
   if (user) {
     target.searchParams.set('userId', user.id)
     target.searchParams.set('userName', user.name)
-  } else if (!target.searchParams.has('userId')) {
-    target.searchParams.set(
-      'userId',
-      incomingUrl.searchParams.get('userId') || `anon_${crypto.randomUUID().slice(0, 8)}`,
-    )
-    target.searchParams.set(
-      'userName',
-      incomingUrl.searchParams.get('userName') || 'Anônimo',
-    )
+  } else {
+    target.searchParams.set('userId', `anon_${crypto.randomUUID().slice(0, 8)}`)
+    target.searchParams.set('userName', 'Anônimo')
   }
 
   // 1. Conecta ao Hub Realtime Durable Object multiplexado
@@ -71,6 +77,20 @@ realtimeRoutes.get('/:channel/ws', async (c) => {
 // Disparar broadcast em um canal via HTTP
 realtimeRoutes.post('/:channel/broadcast', async (c) => {
   const channel = c.req.param('channel')
+
+  if (channel.startsWith('_ek_') || channel.startsWith('db:')) {
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'FORBIDDEN_CHANNEL',
+          message: 'Transmissão direta em canais de sistema (_ek_*) ou CDC (db:*) é proibida.',
+        },
+      },
+      403,
+    )
+  }
+
   const bindings = await getBindings()
   const body = await c.req.json().catch(() => ({}))
 
@@ -110,5 +130,10 @@ realtimeRoutes.get('/:channel/presence', async (c) => {
     return res as any
   }
 
-  return c.json({ success: true, count: 0, users: [] })
+  return c.json({
+    success: true,
+    channel,
+    count: 0,
+    users: [],
+  })
 })

@@ -7,6 +7,7 @@ export interface EdgekitClientOptions {
 
 export interface QueryBuilder<T = any> {
   select(columns: string): QueryBuilder<T>
+  expand(relations: string | string[]): QueryBuilder<T>
   eq(column: string, value: any): QueryBuilder<T>
   neq(column: string, value: any): QueryBuilder<T>
   gt(column: string, value: any): QueryBuilder<T>
@@ -99,6 +100,11 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
     const builder: QueryBuilder<T> = {
       select(columns: string) {
         params.set('select', columns)
+        return builder
+      },
+      expand(relations: string | string[]) {
+        const val = Array.isArray(relations) ? relations.join(',') : relations
+        params.set('expand', val)
         return builder
       },
       eq(col: string, val: any) {
@@ -259,6 +265,31 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
           ch.on(event, callback)
         }
         return ch
+      },
+      // Declarative Query Execution (Zero-Raw SQL)
+      async query(structuredSpec: {
+        select?: string[] | string
+        columns?: string[] | string
+        where?: Array<{ field: string; op: string; value: any }>
+        expand?: string[] | string
+        orderBy?: Array<{ field: string; direction?: 'asc' | 'desc' }>
+        limit?: number
+        offset?: number
+      }) {
+        try {
+          const res = await customFetch(`${baseUrl}/api/v1/db/${table}/query`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(structuredSpec),
+          })
+          const json: any = await res.json()
+          if (!res.ok || !json.success) {
+            return { data: null, error: new Error(json.error?.message || 'Query error') }
+          }
+          return { data: json.data, error: null, meta: json.meta }
+        } catch (err: any) {
+          return { data: null, error: err }
+        }
       },
     }
   }

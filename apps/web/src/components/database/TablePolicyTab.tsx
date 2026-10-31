@@ -8,6 +8,9 @@ import {
   Sliders,
   Save,
   HelpCircle,
+  Plus,
+  Trash2,
+  Code2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -21,7 +24,20 @@ interface TablePolicyTabProps {
   onSavePolicy: (policy: Partial<TablePolicy>) => Promise<void>;
 }
 
-type PolicyRule = 'public' | 'authenticated' | 'owner' | 'org_member' | 'admin' | 'disabled';
+type PolicyRule =
+  | 'public'
+  | 'authenticated'
+  | 'owner'
+  | 'org_member'
+  | 'admin'
+  | 'disabled'
+  | 'custom_sql';
+
+interface DeclarativeConditionItem {
+  field: string;
+  op: 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'like' | 'in' | 'is_null' | 'is_not_null';
+  value: string;
+}
 
 export const TablePolicyTab: React.FC<TablePolicyTabProps> = ({
   tableName,
@@ -37,6 +53,12 @@ export const TablePolicyTab: React.FC<TablePolicyTabProps> = ({
   const [ownerColumn, setOwnerColumn] = useState('user_id');
   const [isSaving, setIsSaving] = useState(false);
 
+  // Construtor Declarativo Zero-SQL
+  const [conditions, setConditions] = useState<DeclarativeConditionItem[]>([
+    { field: 'user_id', op: 'eq', value: '@auth.id' },
+  ]);
+  const [conditionOperator, setConditionOperator] = useState<'and' | 'or'>('and');
+
   useEffect(() => {
     if (initialPolicy) {
       setRlsEnabled(initialPolicy.rlsEnabled ?? true);
@@ -45,10 +67,26 @@ export const TablePolicyTab: React.FC<TablePolicyTabProps> = ({
       setUpdateRule((initialPolicy.updateRule as PolicyRule) || 'owner');
       setDeleteRule((initialPolicy.deleteRule as PolicyRule) || 'owner');
       setOwnerColumn(initialPolicy.ownerColumn || 'user_id');
+
+      if (initialPolicy.customRule) {
+        try {
+          const parsed = JSON.parse(initialPolicy.customRule);
+          if (Array.isArray(parsed.conditions) && parsed.conditions.length > 0) {
+            setConditions(parsed.conditions);
+            if (parsed.operator === 'or' || parsed.operator === 'and') {
+              setConditionOperator(parsed.operator);
+            }
+          }
+        } catch {
+          // Mantém condição padrão se não for JSON
+        }
+      }
     }
   }, [initialPolicy, tableName]);
 
-  const applyPreset = (preset: 'public_read_owner_write' | 'owner_only' | 'org_member' | 'admin_only' | 'fully_public') => {
+  const applyPreset = (
+    preset: 'public_read_owner_write' | 'owner_only' | 'org_member' | 'admin_only' | 'fully_public'
+  ) => {
     if (preset === 'public_read_owner_write') {
       setRlsEnabled(true);
       setSelectRule('public');
@@ -87,9 +125,45 @@ export const TablePolicyTab: React.FC<TablePolicyTabProps> = ({
     }
   };
 
+  const handleAddCondition = () => {
+    setConditions([...conditions, { field: 'status', op: 'eq', value: 'published' }]);
+  };
+
+  const handleRemoveCondition = (index: number) => {
+    if (conditions.length <= 1) {
+      toast.error('Mantenha ao menos uma condição declarativa.');
+      return;
+    }
+    setConditions(conditions.filter((_, i) => i !== index));
+  };
+
+  const handleConditionChange = (
+    index: number,
+    field: keyof DeclarativeConditionItem,
+    val: string
+  ) => {
+    const updated = [...conditions];
+    updated[index] = { ...updated[index], [field]: val };
+    setConditions(updated);
+  };
+
   const handleSave = async () => {
     setIsSaving(true);
     try {
+      const hasCustom =
+        selectRule === 'custom_sql' ||
+        insertRule === 'custom_sql' ||
+        updateRule === 'custom_sql' ||
+        deleteRule === 'custom_sql';
+
+      const customRulePayload = hasCustom
+        ? JSON.stringify({
+            type: 'declarative',
+            operator: conditionOperator,
+            conditions: conditions.filter((c) => c.field.trim().length > 0),
+          })
+        : initialPolicy?.customRule || null;
+
       await onSavePolicy({
         tableName,
         rlsEnabled,
@@ -98,6 +172,7 @@ export const TablePolicyTab: React.FC<TablePolicyTabProps> = ({
         updateRule,
         deleteRule,
         ownerColumn: ownerColumn.trim() || 'user_id',
+        customRule: customRulePayload || undefined,
       });
       toast.success(`Políticas de segurança para "${tableName}" atualizadas com sucesso!`);
     } catch (err: any) {
@@ -118,6 +193,12 @@ export const TablePolicyTab: React.FC<TablePolicyTabProps> = ({
       </div>
     );
   }
+
+  const isCustomUsed =
+    selectRule === 'custom_sql' ||
+    insertRule === 'custom_sql' ||
+    updateRule === 'custom_sql' ||
+    deleteRule === 'custom_sql';
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -245,6 +326,7 @@ export const TablePolicyTab: React.FC<TablePolicyTabProps> = ({
               <option value="owner">Dono (Apenas o autor do registro)</option>
               <option value="org_member">Membro da Organização (Better Auth Org)</option>
               <option value="admin">Administrador (Service Role / Admin)</option>
+              <option value="custom_sql">Regra Declarativa Personalizada (Custom)</option>
               <option value="disabled">Desabilitado (Ninguém pode ler via API)</option>
             </select>
           </div>
@@ -265,6 +347,7 @@ export const TablePolicyTab: React.FC<TablePolicyTabProps> = ({
               <option value="authenticated">Autenticado (Qualquer usuário logado)</option>
               <option value="org_member">Membro da Organização (Better Auth Org)</option>
               <option value="admin">Administrador (Service Role / Admin)</option>
+              <option value="custom_sql">Regra Declarativa Personalizada (Custom)</option>
               <option value="disabled">Desabilitado (Criação bloqueada via API)</option>
             </select>
           </div>
@@ -286,6 +369,7 @@ export const TablePolicyTab: React.FC<TablePolicyTabProps> = ({
               <option value="owner">Dono (Apenas o autor do registro)</option>
               <option value="org_member">Membro da Organização (Better Auth Org)</option>
               <option value="admin">Administrador (Service Role / Admin)</option>
+              <option value="custom_sql">Regra Declarativa Personalizada (Custom)</option>
               <option value="disabled">Desabilitado (Atualização bloqueada)</option>
             </select>
           </div>
@@ -307,6 +391,7 @@ export const TablePolicyTab: React.FC<TablePolicyTabProps> = ({
               <option value="owner">Dono (Apenas o autor do registro)</option>
               <option value="org_member">Membro da Organização (Better Auth Org)</option>
               <option value="admin">Administrador (Service Role / Admin)</option>
+              <option value="custom_sql">Regra Declarativa Personalizada (Custom)</option>
               <option value="disabled">Desabilitado (Remoção bloqueada)</option>
             </select>
           </div>
@@ -334,6 +419,119 @@ export const TablePolicyTab: React.FC<TablePolicyTabProps> = ({
             </span>
           </div>
         </div>
+
+        {/* Construtor Visual Declarativo Zero-SQL */}
+        {(isCustomUsed || conditions.length > 0) && (
+          <div className="pt-3 border-t border-border/60 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Code2 className="size-4 text-orange-500" />
+                <span className="text-xs font-semibold text-foreground">
+                  Construtor de Condições Declarativas (Zero-SQL Injection)
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-muted-foreground">Operador Lógico:</span>
+                <select
+                  value={conditionOperator}
+                  onChange={(e) => setConditionOperator(e.target.value as 'and' | 'or')}
+                  className="h-7 text-xs rounded bg-muted/60 border border-border px-2 text-foreground font-mono focus:outline-hidden"
+                >
+                  <option value="and">AND (Todas válidas)</option>
+                  <option value="or">OR (Qualquer válida)</option>
+                </select>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleAddCondition}
+                  className="h-7 text-xs px-2 gap-1 cursor-pointer"
+                >
+                  <Plus className="size-3" />
+                  <span>Condição</span>
+                </Button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {conditions.map((cond, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-center gap-2 p-2 rounded-lg bg-muted/30 border border-border/60 text-xs"
+                >
+                  <input
+                    type="text"
+                    value={cond.field}
+                    onChange={(e) => handleConditionChange(idx, 'field', e.target.value)}
+                    placeholder="coluna (ex: status, user_id)"
+                    className="w-36 h-7.5 rounded-md bg-muted/60 border border-border px-2 text-xs font-mono text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
+                  />
+
+                  <select
+                    value={cond.op}
+                    onChange={(e) => handleConditionChange(idx, 'op', e.target.value as any)}
+                    className="h-7.5 text-xs rounded-md bg-muted/60 border border-border px-2 text-foreground font-mono focus:outline-hidden focus:ring-1 focus:ring-primary"
+                  >
+                    <option value="eq">= (igual)</option>
+                    <option value="neq">!= (diferente)</option>
+                    <option value="gt">&gt; (maior)</option>
+                    <option value="gte">&gt;= (maior ou igual)</option>
+                    <option value="lt">&lt; (menor)</option>
+                    <option value="lte">&lt;= (menor ou igual)</option>
+                    <option value="like">LIKE (contém)</option>
+                    <option value="is_null">IS NULL</option>
+                    <option value="is_not_null">IS NOT NULL</option>
+                  </select>
+
+                  <div className="flex-1 flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={cond.value}
+                      onChange={(e) => handleConditionChange(idx, 'value', e.target.value)}
+                      placeholder="valor ou token (@auth.id, @auth.org_id)"
+                      className="flex-1 h-7.5 rounded-md bg-muted/60 border border-border px-2 text-xs font-mono text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
+                    />
+
+                    {/* Chips de Tokens Rápidos */}
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => handleConditionChange(idx, 'value', '@auth.id')}
+                        className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-orange-500/10 text-orange-500 hover:bg-orange-500/20 border border-orange-500/20 cursor-pointer"
+                        title="ID do usuário autenticado"
+                      >
+                        @auth.id
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleConditionChange(idx, 'value', '@auth.org_id')}
+                        className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-purple-500/10 text-purple-500 hover:bg-purple-500/20 border border-purple-500/20 cursor-pointer"
+                        title="ID da organização ativa"
+                      >
+                        @auth.org_id
+                      </button>
+                    </div>
+                  </div>
+
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => handleRemoveCondition(idx)}
+                    className="size-7 text-muted-foreground hover:text-destructive cursor-pointer shrink-0"
+                    title="Remover condição"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+
+            <p className="text-[11px] text-muted-foreground">
+              As regras são compiladas diretamente no backend para SQL parametrizado pelo Policy Engine sem riscos de SQL Injection.
+            </p>
+          </div>
+        )}
 
         {/* Save Button */}
         <div className="flex justify-end pt-3">

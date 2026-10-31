@@ -1230,4 +1230,261 @@ describe('Edgekit Platform — Fundação, Segurança & Identidade Dupla (Fase 1
       expect(res3.status).toBe(403)
     })
   })
+
+  describe('Hardening Arquitetural: Anti-Hijacking, Relações Declarativas & Zero-Trust Origin', () => {
+    let testUserCookie = ''
+    let testUserId = ''
+
+    beforeAll(async () => {
+      const res = await app.request('/api/v1/auth/sign-up/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Security Test User',
+          email: 'sectest@appdomain.com',
+          password: 'senha-app-user-123',
+        }),
+      })
+      const json: any = await res.json()
+      testUserId = json.user.id
+      testUserCookie = res.headers.get('set-cookie')?.split(';')[0] || ''
+    })
+
+    it('Anti-Hijacking em PATCH: usuário comum não pode transferir titularidade (user_id/organization_id)', async () => {
+      const db = await getDb()
+      await db.run(sql`DROP TABLE IF EXISTS user_notes`)
+      await app.request('/api/v1/admin/tables', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
+        body: JSON.stringify({
+          name: 'user_notes',
+          columns: [
+            { name: 'id', type: 'TEXT', primaryKey: true },
+            { name: 'title', type: 'TEXT' },
+            { name: 'user_id', type: 'TEXT' },
+            { name: 'organization_id', type: 'TEXT' },
+          ],
+        }),
+      })
+
+      await app.request('/api/v1/admin/tables/user_notes/policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
+        body: JSON.stringify({
+          rlsEnabled: true,
+          selectRule: 'public',
+          insertRule: 'authenticated',
+          updateRule: 'authenticated',
+          deleteRule: 'owner',
+          ownerColumn: 'user_id',
+        }),
+      })
+
+      // Insere nota como testUserId
+      await app.request('/api/v1/db/user_notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: testUserCookie },
+        body: JSON.stringify({
+          id: 'note-anti-hijack-1',
+          title: 'Minha Nota Pessoal',
+        }),
+      })
+
+      // Tenta modificar title e simultaneamente adulterar user_id e organization_id
+      const patchRes = await app.request('/api/v1/db/user_notes/note-anti-hijack-1', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: testUserCookie },
+        body: JSON.stringify({
+          title: 'Titulo Alterado',
+          user_id: 'malicious_new_owner_id',
+          organization_id: 'malicious_org_id',
+        }),
+      })
+      expect(patchRes.status).toBe(200)
+
+      // Confirma que o título mudou, mas user_id e organization_id NÃO foram sequestrados
+      const checkRes = await app.request('/api/v1/db/user_notes/note-anti-hijack-1', {
+        headers: { Cookie: adminCookie },
+      })
+      const noteData: any = await checkRes.json()
+      expect(noteData.data.title).toBe('Titulo Alterado')
+      expect(noteData.data.user_id).toBe(testUserId)
+      expect(noteData.data.organization_id).toBeNull()
+    })
+
+    it('Anti-Hijacking em POST /batch: impede alteração de user_id/organization_id em lote', async () => {
+      const batchRes = await app.request('/api/v1/db/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: testUserCookie },
+        body: JSON.stringify({
+          operations: [
+            {
+              type: 'update',
+              table: 'user_notes',
+              id: 'note-anti-hijack-1',
+              data: {
+                title: 'Titulo Batch Alterado',
+                user_id: 'hacker_stolen_id',
+              },
+            },
+          ],
+        }),
+      })
+      expect(batchRes.status).toBe(200)
+
+      const checkRes = await app.request('/api/v1/db/user_notes/note-anti-hijack-1', {
+        headers: { Cookie: adminCookie },
+      })
+      const noteData: any = await checkRes.json()
+      expect(noteData.data.title).toBe('Titulo Batch Alterado')
+      expect(noteData.data.user_id).toBe(testUserId)
+    })
+
+    it('Bloqueio estrito de acesso direto a tabelas criptográficas de sistema (jwks, passkeys, two_factors)', async () => {
+      const jwksRes = await app.request('/api/v1/db/jwks', {
+        headers: { apikey: anonKey },
+      })
+      expect(jwksRes.status).toBe(403)
+      const jwksJson: any = await jwksRes.json()
+      expect(jwksJson.error.code).toBe('FORBIDDEN_TABLE')
+
+      const passkeysRes = await app.request('/api/v1/db/passkeys', {
+        headers: { apikey: anonKey },
+      })
+      expect(passkeysRes.status).toBe(403)
+
+      const twoFactorsRes = await app.request('/api/v1/db/two_factors', {
+        headers: { apikey: anonKey },
+      })
+      expect(twoFactorsRes.status).toBe(403)
+    })
+
+    it('Zero-Trust Origin: Bloqueia service_role key vinda de navegadores não autorizados', async () => {
+      const badOriginRes = await app.request('/api/v1/admin/stats', {
+        headers: {
+          apikey: serviceRoleKey,
+          Origin: 'https://phishing-site.xyz',
+        },
+      })
+      expect(badOriginRes.status).toBe(403)
+      const badOriginJson: any = await badOriginRes.json()
+      expect(badOriginJson.error.code).toBe('FORBIDDEN_SERVICE_ROLE_BROWSER')
+    })
+
+    it('Relações Declarativas & Expansão: Cria tabela com foreign key e expande dados relacionados', async () => {
+      const db = await getDb()
+      await db.run(sql`DROP TABLE IF EXISTS post_reviews`)
+
+      // 1. Cria tabela com FK explícita para users(id)
+      const createRes = await app.request('/api/v1/admin/tables', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
+        body: JSON.stringify({
+          name: 'post_reviews',
+          columns: [
+            { name: 'id', type: 'TEXT', primaryKey: true },
+            { name: 'content', type: 'TEXT' },
+            {
+              name: 'user_id',
+              type: 'TEXT',
+              references: { table: 'users', column: 'id', onDelete: 'CASCADE' },
+            },
+          ],
+        }),
+      })
+      expect(createRes.status).toBe(201)
+
+      // 2. Define política pública para leitura
+      await app.request('/api/v1/admin/tables/post_reviews/policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
+        body: JSON.stringify({
+          rlsEnabled: false,
+          selectRule: 'public',
+          insertRule: 'authenticated',
+        }),
+      })
+
+      // 3. Insere registro vinculado ao testUserId
+      await app.request('/api/v1/db/post_reviews', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: testUserCookie },
+        body: JSON.stringify({
+          id: 'review-1',
+          content: 'Excelente artigo sobre Edgekit!',
+          user_id: testUserId,
+        }),
+      })
+
+      // 4. Consulta via GET com ?expand=user_id
+      const expandRes = await app.request('/api/v1/db/post_reviews?expand=user_id', {
+        headers: { apikey: anonKey },
+      })
+      expect(expandRes.status).toBe(200)
+      const expandJson: any = await expandRes.json()
+      expect(expandJson.data.length).toBeGreaterThan(0)
+      const item = expandJson.data.find((d: any) => d.id === 'review-1')
+      expect(item).toBeDefined()
+      expect(item.user).toBeDefined()
+      expect(item.user.email).toBe('sectest@appdomain.com')
+
+      // 5. Consulta via POST /:table/query (Declarative Query Builder)
+      const queryRes = await app.request('/api/v1/db/post_reviews/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: anonKey },
+        body: JSON.stringify({
+          columns: ['id', 'content', 'user_id'],
+          where: [{ field: 'id', op: 'eq', value: 'review-1' }],
+          expand: ['user_id'],
+        }),
+      })
+      expect(queryRes.status).toBe(200)
+      const queryJson: any = await queryRes.json()
+      expect(queryJson.data.length).toBe(1)
+      expect(queryJson.data[0].content).toBe('Excelente artigo sobre Edgekit!')
+      expect(queryJson.data[0].user).toBeDefined()
+      expect(queryJson.data[0].user.name).toBe('Security Test User')
+    })
+
+    it('Proteção de Canais Realtime: Rejeita subscrições ou broadcasts a canais do sistema (_ek_*)', async () => {
+      const broadcastRes = await app.request('/api/v1/realtime/_ek_system/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: anonKey },
+        body: JSON.stringify({ event: 'malicious_event', payload: {} }),
+      })
+      expect(broadcastRes.status).toBe(403)
+      const broadcastJson: any = await broadcastRes.json()
+      expect(broadcastJson.error.code).toBe('FORBIDDEN_CHANNEL')
+    })
+
+    it('Client SDK: .expand() e .query() operam com tipagem e sem SQL Injection', async () => {
+      const client = createEdgekitClient({
+        url: 'http://localhost',
+        anonKey,
+        fetch: async (input, init) => {
+          const path = typeof input === 'string' ? new URL(input).pathname + new URL(input).search : input
+          return Promise.resolve(app.request(path as string, init as any)) as unknown as Response
+        },
+      })
+
+      // 1. Testa .expand('user_id') via client SDK
+      const expandRes = await client.from('post_reviews').select('id, content, user_id').expand('user_id').execute()
+      expect(expandRes.error).toBeNull()
+      expect(expandRes.data?.length).toBeGreaterThan(0)
+      const reviewItem = expandRes.data?.find((d: any) => d.id === 'review-1')
+      expect(reviewItem).toBeDefined()
+      expect(reviewItem.user).toBeDefined()
+      expect(reviewItem.user.name).toBe('Security Test User')
+
+      // 2. Testa .query({ columns, where, expand }) via client SDK
+      const queryRes = await client.from('post_reviews').query({
+        columns: ['id', 'content'],
+        where: [{ field: 'id', op: 'eq', value: 'review-1' }],
+        expand: ['user_id'],
+      })
+      expect(queryRes.error).toBeNull()
+      expect(queryRes.data?.length).toBe(1)
+      expect(queryRes.data?.[0].user?.name).toBe('Security Test User')
+    })
+  })
 })

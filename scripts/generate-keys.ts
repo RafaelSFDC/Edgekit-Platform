@@ -4,11 +4,13 @@ import path from 'node:path'
 
 export function generateKeys() {
   const betterAuthSecret = crypto.randomBytes(32).toString('hex')
-  const anonKey = `hb_anon_${crypto.randomBytes(24).toString('base64url')}`
-  const serviceRoleKey = `hb_service_${crypto.randomBytes(32).toString('base64url')}`
+  const setupToken = `ek_setup_${crypto.randomBytes(24).toString('base64url')}`
+  const anonKey = `ek_anon_${crypto.randomBytes(24).toString('base64url')}`
+  const serviceRoleKey = `ek_sec_${crypto.randomBytes(32).toString('base64url')}`
 
   return {
     betterAuthSecret,
+    setupToken,
     anonKey,
     serviceRoleKey,
   }
@@ -17,11 +19,12 @@ export function generateKeys() {
 function main() {
   const keys = generateKeys()
   console.info('==================================================')
-  console.info('🔑 HonoBase Security & API Keys Generated:')
+  console.info('🔑 Edgekit Platform Security & API Keys Generated:')
   console.info('==================================================')
-  console.info(`BETTER_AUTH_SECRET:        ${keys.betterAuthSecret}`)
-  console.info(`HONOBASE_ANON_KEY:         ${keys.anonKey}`)
-  console.info(`HONOBASE_SERVICE_ROLE_KEY: ${keys.serviceRoleKey}`)
+  console.info(`BETTER_AUTH_SECRET:       ${keys.betterAuthSecret}`)
+  console.info(`SETUP_TOKEN:              ${keys.setupToken}`)
+  console.info(`EDGEKIT_ANON_KEY:         ${keys.anonKey}`)
+  console.info(`EDGEKIT_SERVICE_ROLE_KEY: ${keys.serviceRoleKey}`)
   console.info('==================================================')
 
   const envPath = path.resolve(process.cwd(), '.env')
@@ -34,12 +37,16 @@ function main() {
         `BETTER_AUTH_SECRET=${keys.betterAuthSecret}`,
       )
       content = content.replace(
-        /HONOBASE_ANON_KEY=.*/,
-        `HONOBASE_ANON_KEY=${keys.anonKey}`,
+        /SETUP_TOKEN=.*/,
+        `SETUP_TOKEN=${keys.setupToken}`,
       )
       content = content.replace(
-        /HONOBASE_SERVICE_ROLE_KEY=.*/,
-        `HONOBASE_SERVICE_ROLE_KEY=${keys.serviceRoleKey}`,
+        /EDGEKIT_ANON_KEY=.*/,
+        `EDGEKIT_ANON_KEY=${keys.anonKey}`,
+      )
+      content = content.replace(
+        /EDGEKIT_SERVICE_ROLE_KEY=.*/,
+        `EDGEKIT_SERVICE_ROLE_KEY=${keys.serviceRoleKey}`,
       )
       fs.writeFileSync(envPath, content)
       console.info('✅ Generated and saved new .env file with fresh secure keys!')

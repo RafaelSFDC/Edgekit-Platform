@@ -130,16 +130,19 @@ async function setupCloudflare() {
   let serviceRoleKey = ''
   let anonKey = ''
   let authSecret = ''
+  let setupToken = ''
 
   if (fs.existsSync(envPath)) {
     const envContent = fs.readFileSync(envPath, 'utf8')
     const matchService = envContent.match(/EDGEKIT_SERVICE_ROLE_KEY=(.*)/)
     const matchAnon = envContent.match(/EDGEKIT_ANON_KEY=(.*)/)
     const matchAuth = envContent.match(/BETTER_AUTH_SECRET=(.*)/)
+    const matchSetup = envContent.match(/SETUP_TOKEN=(.*)/)
 
     if (matchService && matchService[1]) serviceRoleKey = matchService[1].trim()
     if (matchAnon && matchAnon[1]) anonKey = matchAnon[1].trim()
     if (matchAuth && matchAuth[1]) authSecret = matchAuth[1].trim()
+    if (matchSetup && matchSetup[1]) setupToken = matchSetup[1].trim()
   }
 
   function putSecret(name: string, value: string) {
@@ -162,6 +165,9 @@ async function setupCloudflare() {
   if (authSecret) {
     putSecret('BETTER_AUTH_SECRET', authSecret)
   }
+  if (setupToken) {
+    putSecret('SETUP_TOKEN', setupToken)
+  }
   console.info('✅ Segredos e chaves de segurança sincronizados com sucesso!\n')
 
   // 6. Conclusão e Instruções de Deploy
@@ -170,12 +176,13 @@ async function setupCloudflare() {
   console.info('=================================================================')
   console.info('Para publicar sua plataforma completa na Cloudflare:')
   console.info('  👉 pnpm deploy\n')
-  console.info('Após o deploy, acesse o link gerado pelo Wrangler e faça login')
-  console.info('usando sua Chave de Administração (EDGEKIT_SERVICE_ROLE_KEY):')
-  if (serviceRoleKey) {
-    console.info(`👉 ${serviceRoleKey}\n`)
+  console.info('Após o deploy, acesse o link gerado pelo Wrangler.')
+  console.info('Na primeira inicialização, você será direcionado ao Setup Wizard (/setup)')
+  console.info('para cadastrar o Proprietário (Owner) utilizando seu SETUP_TOKEN:')
+  if (setupToken) {
+    console.info(`👉 SETUP_TOKEN: ${setupToken}\n`)
   } else {
-    console.info('👉 Consulte o arquivo .env no seu projeto.\n')
+    console.info('👉 Consulte o arquivo .env no seu projeto para obter o SETUP_TOKEN.\n')
   }
 }
 

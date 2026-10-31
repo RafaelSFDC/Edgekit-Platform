@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
+import { prettyJSON } from 'hono/pretty-json'
 import { secureHeaders } from 'hono/secure-headers'
 import type { AppEnv } from './types'
 import { checkIpAccess, resolveCorsOrigin } from './auth/security'
@@ -18,6 +19,7 @@ export const app = new Hono<AppEnv>()
 // 1. Middlewares Globais
 app.use('*', logger())
 app.use('*', secureHeaders())
+app.use('*', prettyJSON())
 app.use(
   '*',
   cors({
@@ -146,7 +148,20 @@ app.route('/api/v1/webhooks', webhookRoutes)
 app.route('/api/v1/functions', functionsRoutes)
 app.route('/api/v1/admin', adminRoutes)
 
-// 6. Tratamento de Erros Global
+// 6. Tratamento de Erros e Rotas Não Encontradas
+app.notFound((c) => {
+  return c.json(
+    {
+      success: false,
+      error: {
+        code: 'NOT_FOUND',
+        message: `Rota não encontrada: ${c.req.method} ${c.req.path}`,
+      },
+    },
+    404,
+  )
+})
+
 app.onError((err, c) => {
   console.error('[Edgekit Platform Error]:', err)
   return c.json(

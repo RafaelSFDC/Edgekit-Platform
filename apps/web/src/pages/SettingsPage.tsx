@@ -13,7 +13,7 @@ import {
   Lock,
 } from 'lucide-react';
 import { useI18n } from '../i18n/context';
-import { usePlatformKeysQuery } from '../hooks/api/use-auth';
+import { usePlatformKeysQuery, usePublicConfigQuery } from '../hooks/api/use-auth';
 import { useSecuritySettingsQuery, useUpdateSecuritySettingsMutation } from '../hooks/api/use-security';
 import { PageLayout } from '../components/layout/PageLayout';
 import { PageHeader } from '@/components/ui/page-header';
@@ -25,10 +25,14 @@ import { toast } from 'sonner';
 export const SettingsPage: React.FC = () => {
   const { t } = useI18n();
   const { data: keys = {}, isLoading } = usePlatformKeysQuery();
+  const { data: publicConfig } = usePublicConfigQuery();
   const { data: securitySettings } = useSecuritySettingsQuery();
   const updateSecurityMutation = useUpdateSecuritySettingsMutation();
 
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const displayAnonKey = publicConfig?.anonKey || keys.anonKey || 'ek_anon_default';
+  const displayServiceKey = keys.serviceRoleKey || 'ek_sec_protected';
 
   // Security Form State
   const [allowedOrigins, setAllowedOrigins] = useState<string[]>([]);
@@ -120,12 +124,12 @@ export const SettingsPage: React.FC = () => {
           <CardContent>
             <div className="flex items-center gap-2 bg-muted/60 p-2.5 rounded-xl border border-border">
               <code className="text-xs font-mono text-foreground flex-1 truncate">
-                {isLoading ? '...' : keys.anonKey || 'hb_anon_default'}
+                {isLoading ? '...' : displayAnonKey}
               </code>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => copyToClipboard(keys.anonKey || 'hb_anon_default', 'anon')}
+                onClick={() => copyToClipboard(displayAnonKey, 'anon')}
                 className="gap-1.5 text-xs h-7 shrink-0"
               >
                 {copiedKey === 'anon' ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
@@ -146,18 +150,18 @@ export const SettingsPage: React.FC = () => {
               <Badge variant="destructive" className="text-[10px]">Restrita / Admin</Badge>
             </div>
             <CardDescription className="text-xs">
-              Concede controle total administrativo e bypass de RLS. Nunca exponha esta chave no navegador ou repositórios públicos.
+              Concede controle total administrativo e bypass de RLS. Armazenada via hash SHA-256 no banco D1 para uso exclusivo em backend.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="flex items-center gap-2 bg-muted/60 p-2.5 rounded-xl border border-border">
               <code className="text-xs font-mono text-foreground flex-1 truncate">
-                {isLoading ? '...' : keys.serviceRoleKey || 'hb_service_default'}
+                {isLoading ? '...' : displayServiceKey}
               </code>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => copyToClipboard(keys.serviceRoleKey || 'hb_service_default', 'service')}
+                onClick={() => copyToClipboard(displayServiceKey, 'service')}
                 className="gap-1.5 text-xs h-7 shrink-0"
               >
                 {copiedKey === 'service' ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}

@@ -562,6 +562,7 @@ adminRoutes.post('/tables', requireAdmin(), async (c) => {
   }
 
   const colDefinitions: string[] = []
+  const fkConstraints: string[] = []
   let hasPrimaryKey = false
 
   for (const col of columns) {
@@ -586,18 +587,36 @@ adminRoutes.post('/tables', requireAdmin(), async (c) => {
     if (col.notNull) {
       def += ' NOT NULL'
     }
+    if (col.unique) {
+      def += ' UNIQUE'
+    }
     if (col.defaultValue !== undefined && col.defaultValue !== '') {
       def += ` DEFAULT ${col.defaultValue}`
     }
 
     colDefinitions.push(def)
+
+    if (col.relation && typeof col.relation === 'object') {
+      const targetTable = (col.relation.targetTable || '').trim()
+      const targetCol = (col.relation.targetColumn || 'id').trim()
+      const onDelete = (col.relation.onDelete || 'CASCADE').toUpperCase()
+      const validActions = new Set(['CASCADE', 'SET NULL', 'RESTRICT', 'NO ACTION'])
+      const safeAction = validActions.has(onDelete) ? onDelete : 'CASCADE'
+
+      if (SAFE_NAME.test(targetTable) && SAFE_NAME.test(targetCol)) {
+        fkConstraints.push(
+          `FOREIGN KEY (\`${colName}\`) REFERENCES \`${targetTable}\`(\`${targetCol}\`) ON DELETE ${safeAction}`,
+        )
+      }
+    }
   }
 
   if (!hasPrimaryKey) {
     colDefinitions.unshift('`id` TEXT PRIMARY KEY NOT NULL')
   }
 
-  const createTableSql = `CREATE TABLE \`${tableName}\` (\n  ${colDefinitions.join(',\n  ')}\n);`
+  const allDefinitions = [...colDefinitions, ...fkConstraints]
+  const createTableSql = `CREATE TABLE \`${tableName}\` (\n  ${allDefinitions.join(',\n  ')}\n);`
   const db = await getDb()
 
   try {
@@ -633,6 +652,45 @@ adminRoutes.post('/tables', requireAdmin(), async (c) => {
     )
   } catch (err: any) {
     return c.json({ success: false, error: { message: `Falha ao criar tabela: ${err.message}` } }, 500)
+  }
+})
+
+// Obter esquema e relacionamentos de uma tabela (Declarativo)
+adminRoutes.get('/tables/:name/schema', requireAdmin(), async (c) => {
+  const tableName = c.req.param('name').trim()
+  if (!SAFE_NAME.test(tableName)) {
+    return c.json({ success: false, error: { message: 'Nome de tabela inválido.' } }, 400)
+  }
+
+  const db = await getDb()
+  try {
+    const columns: any[] = await db.all(sql.raw(`PRAGMA table_info(\`${tableName}\`)`))
+    const foreignKeys: any[] = await db.all(sql.raw(`PRAGMA foreign_key_list(\`${tableName}\`)`))
+
+    return c.json({
+      success: true,
+      data: {
+        tableName,
+        columns: columns.map((col) => ({
+          cid: col.cid,
+          name: col.name,
+          type: col.type,
+          notNull: Boolean(col.notnull),
+          defaultValue: col.dflt_value,
+          primaryKey: Boolean(col.pk),
+        })),
+        foreignKeys: foreignKeys.map((fk) => ({
+          id: fk.id,
+          targetTable: fk.table,
+          fromColumn: fk.from,
+          toColumn: fk.to,
+          onUpdate: fk.on_update,
+          onDelete: fk.on_delete,
+        })),
+      },
+    })
+  } catch (err: any) {
+    return c.json({ success: false, error: { message: err.message } }, 500)
   }
 })
 
