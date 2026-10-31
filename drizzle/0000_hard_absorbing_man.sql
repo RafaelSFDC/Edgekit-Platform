@@ -1,0 +1,208 @@
+CREATE TABLE `accounts` (
+	`id` text PRIMARY KEY NOT NULL,
+	`account_id` text NOT NULL,
+	`provider_id` text NOT NULL,
+	`user_id` text NOT NULL,
+	`access_token` text,
+	`refresh_token` text,
+	`id_token` text,
+	`access_token_expires_at` integer,
+	`refresh_token_expires_at` integer,
+	`scope` text,
+	`password` text,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL,
+	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE TABLE `_ek_admin_invites` (
+	`id` text PRIMARY KEY NOT NULL,
+	`email` text NOT NULL,
+	`role` text DEFAULT 'developer' NOT NULL,
+	`token` text NOT NULL,
+	`invited_by` text,
+	`expires_at` integer NOT NULL,
+	`created_at` integer NOT NULL,
+	FOREIGN KEY (`invited_by`) REFERENCES `_ek_admins`(`id`) ON UPDATE no action ON DELETE set null
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `_ek_admin_invites_token_unique` ON `_ek_admin_invites` (`token`);--> statement-breakpoint
+CREATE TABLE `_ek_admin_sessions` (
+	`id` text PRIMARY KEY NOT NULL,
+	`token` text NOT NULL,
+	`admin_id` text NOT NULL,
+	`expires_at` integer NOT NULL,
+	`ip_address` text,
+	`user_agent` text,
+	`created_at` integer NOT NULL,
+	FOREIGN KEY (`admin_id`) REFERENCES `_ek_admins`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `_ek_admin_sessions_token_unique` ON `_ek_admin_sessions` (`token`);--> statement-breakpoint
+CREATE TABLE `_ek_admins` (
+	`id` text PRIMARY KEY NOT NULL,
+	`email` text NOT NULL,
+	`name` text NOT NULL,
+	`password` text NOT NULL,
+	`role` text DEFAULT 'admin' NOT NULL,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `_ek_admins_email_unique` ON `_ek_admins` (`email`);--> statement-breakpoint
+CREATE TABLE `_ek_api_keys` (
+	`id` text PRIMARY KEY NOT NULL,
+	`name` text NOT NULL,
+	`key_prefix` text NOT NULL,
+	`key_hash` text NOT NULL,
+	`type` text NOT NULL,
+	`role` text DEFAULT 'anon' NOT NULL,
+	`expires_at` integer,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `_ek_api_keys_key_hash_unique` ON `_ek_api_keys` (`key_hash`);--> statement-breakpoint
+CREATE TABLE `_ek_audit_logs` (
+	`id` text PRIMARY KEY NOT NULL,
+	`action` text NOT NULL,
+	`entity` text NOT NULL,
+	`entity_id` text,
+	`actor_type` text NOT NULL,
+	`actor_id` text,
+	`details` text,
+	`ip_address` text,
+	`created_at` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE `_ek_settings` (
+	`key` text PRIMARY KEY NOT NULL,
+	`value` text NOT NULL,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE `_ek_storage_buckets` (
+	`id` text PRIMARY KEY NOT NULL,
+	`name` text NOT NULL,
+	`is_public` integer DEFAULT false NOT NULL,
+	`allowed_mime_types` text DEFAULT '["*"]' NOT NULL,
+	`max_size_bytes` integer DEFAULT 10485760 NOT NULL,
+	`read_rule` text DEFAULT 'public' NOT NULL,
+	`write_rule` text DEFAULT 'authenticated' NOT NULL,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `_ek_storage_buckets_name_unique` ON `_ek_storage_buckets` (`name`);--> statement-breakpoint
+CREATE TABLE `_ek_storage_objects` (
+	`id` text PRIMARY KEY NOT NULL,
+	`bucket` text NOT NULL,
+	`key` text NOT NULL,
+	`name` text NOT NULL,
+	`size` integer NOT NULL,
+	`mime_type` text NOT NULL,
+	`user_id` text,
+	`is_public` integer DEFAULT false NOT NULL,
+	`metadata` text,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `_ek_storage_objects_key_unique` ON `_ek_storage_objects` (`key`);--> statement-breakpoint
+CREATE TABLE `_ek_table_policies` (
+	`id` text PRIMARY KEY NOT NULL,
+	`table_name` text NOT NULL,
+	`rls_enabled` integer DEFAULT true NOT NULL,
+	`select_rule` text DEFAULT 'disabled' NOT NULL,
+	`insert_rule` text DEFAULT 'disabled' NOT NULL,
+	`update_rule` text DEFAULT 'disabled' NOT NULL,
+	`delete_rule` text DEFAULT 'disabled' NOT NULL,
+	`owner_column` text DEFAULT 'user_id' NOT NULL,
+	`custom_rule` text,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `_ek_table_policies_table_name_unique` ON `_ek_table_policies` (`table_name`);--> statement-breakpoint
+CREATE TABLE `_ek_webhooks` (
+	`id` text PRIMARY KEY NOT NULL,
+	`name` text NOT NULL,
+	`url` text NOT NULL,
+	`events` text DEFAULT '["*"]' NOT NULL,
+	`secret` text,
+	`enabled` integer DEFAULT true NOT NULL,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE `invitations` (
+	`id` text PRIMARY KEY NOT NULL,
+	`organization_id` text NOT NULL,
+	`email` text NOT NULL,
+	`role` text DEFAULT 'member',
+	`status` text DEFAULT 'pending' NOT NULL,
+	`expires_at` integer NOT NULL,
+	`inviter_id` text NOT NULL,
+	FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`inviter_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE TABLE `members` (
+	`id` text PRIMARY KEY NOT NULL,
+	`organization_id` text NOT NULL,
+	`user_id` text NOT NULL,
+	`role` text DEFAULT 'member' NOT NULL,
+	`created_at` integer NOT NULL,
+	FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE TABLE `organizations` (
+	`id` text PRIMARY KEY NOT NULL,
+	`name` text NOT NULL,
+	`slug` text NOT NULL,
+	`logo` text,
+	`metadata` text,
+	`created_at` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `organizations_slug_unique` ON `organizations` (`slug`);--> statement-breakpoint
+CREATE TABLE `sessions` (
+	`id` text PRIMARY KEY NOT NULL,
+	`expires_at` integer NOT NULL,
+	`token` text NOT NULL,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL,
+	`ip_address` text,
+	`user_agent` text,
+	`user_id` text NOT NULL,
+	`active_organization_id` text,
+	`impersonated_by` text,
+	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `sessions_token_unique` ON `sessions` (`token`);--> statement-breakpoint
+CREATE TABLE `users` (
+	`id` text PRIMARY KEY NOT NULL,
+	`name` text NOT NULL,
+	`email` text NOT NULL,
+	`email_verified` integer DEFAULT false NOT NULL,
+	`image` text,
+	`role` text DEFAULT 'user' NOT NULL,
+	`banned` integer DEFAULT false,
+	`ban_reason` text,
+	`ban_expires` integer,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `users_email_unique` ON `users` (`email`);--> statement-breakpoint
+CREATE TABLE `verifications` (
+	`id` text PRIMARY KEY NOT NULL,
+	`identifier` text NOT NULL,
+	`value` text NOT NULL,
+	`expires_at` integer NOT NULL,
+	`created_at` integer,
+	`updated_at` integer
+);

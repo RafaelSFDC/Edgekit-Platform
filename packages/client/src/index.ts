@@ -16,6 +16,11 @@ export interface QueryBuilder<T = any> {
   lt(column: string, value: any): QueryBuilder<T>
   lte(column: string, value: any): QueryBuilder<T>
   like(column: string, pattern: string): QueryBuilder<T>
+  in(column: string, values: any[]): QueryBuilder<T>
+  notIn(column: string, values: any[]): QueryBuilder<T>
+  isNull(column: string): QueryBuilder<T>
+  isNotNull(column: string): QueryBuilder<T>
+  filter(column: string, operator: string, value: any): QueryBuilder<T>
   order(column: string, direction?: 'asc' | 'desc'): QueryBuilder<T>
   limit(count: number): QueryBuilder<T>
   offset(count: number): QueryBuilder<T>
@@ -124,6 +129,39 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
       },
       like(col: string, pattern: string) {
         params.set(col, `like:${pattern}`)
+        return builder
+      },
+      in(col: string, values: any[]) {
+        params.set(col, `in:${values.join(',')}`)
+        return builder
+      },
+      notIn(col: string, values: any[]) {
+        params.set(col, `not_in:${values.join(',')}`)
+        return builder
+      },
+      isNull(col: string) {
+        params.set(col, 'is:null')
+        return builder
+      },
+      isNotNull(col: string) {
+        params.set(col, 'is:not_null')
+        return builder
+      },
+      filter(col: string, op: string, val: any) {
+        const cleanOp = op.toLowerCase()
+        if (cleanOp === 'in' && Array.isArray(val)) {
+          return builder.in(col, val)
+        }
+        if (cleanOp === 'not_in' && Array.isArray(val)) {
+          return builder.notIn(col, val)
+        }
+        if (cleanOp === 'is' && val === null) {
+          return builder.isNull(col)
+        }
+        if (cleanOp === 'is_not' && val === null) {
+          return builder.isNotNull(col)
+        }
+        params.set(col, `${cleanOp}:${val}`)
         return builder
       },
       order(col: string, direction = 'asc') {

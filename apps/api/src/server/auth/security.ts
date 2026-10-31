@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { AppEnv } from '../types'
 import { getDb } from '../db'
-import { appSettings } from '../db/schema'
+import { ekSettings } from '../db/schema'
 
 export interface SecurityConfig {
   allowedOrigins: string[]
@@ -46,7 +46,7 @@ export async function getSecurityConfig(): Promise<SecurityConfig> {
 
   try {
     const db = await getDb()
-    const settings = await db.select().from(appSettings).all()
+    const settings = await db.select().from(ekSettings).all()
     const settingsMap = new Map(settings.map((s) => [s.key, s.value]))
 
     const allowedOriginsRaw = settingsMap.get('security_allowed_origins') || '[]'

@@ -11,6 +11,7 @@ import { storageRoutes } from './routes/storage.routes'
 import { realtimeRoutes } from './routes/realtime.routes'
 import { functionsRoutes } from './routes/functions.routes'
 import { adminRoutes } from './routes/admin.routes'
+import { webhookRoutes } from './routes/webhook.routes'
 
 export const app = new Hono<AppEnv>()
 
@@ -23,7 +24,7 @@ app.use(
     origin: async (origin, c) => (await resolveCorsOrigin(origin, c)) || '',
     allowHeaders: ['Content-Type', 'Authorization', 'apikey', 'x-api-key', 'X-Requested-With', 'x-app-secret'],
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    exposeHeaders: ['Content-Length', 'X-Edgekit-Version', 'X-HonoBase-Version', 'set-auth-token'],
+    exposeHeaders: ['Content-Length', 'X-Edgekit-Version', 'set-auth-token'],
     credentials: true,
   }),
 )
@@ -141,6 +142,7 @@ app.route('/api/v1/auth', authRoutes)
 app.route('/api/v1/db', dbRoutes)
 app.route('/api/v1/storage', storageRoutes)
 app.route('/api/v1/realtime', realtimeRoutes)
+app.route('/api/v1/webhooks', webhookRoutes)
 app.route('/api/v1/functions', functionsRoutes)
 app.route('/api/v1/admin', adminRoutes)
 

@@ -3,32 +3,39 @@ import { eq } from 'drizzle-orm'
 import { nanoid } from 'nanoid'
 import type { AppEnv } from '../types'
 import { getDb } from '../db'
-import { webhooks } from '../db/schema'
+import { ekWebhooks } from '../db/schema'
 import { getBindings } from '../env'
 import { requireAdmin, requireAuth } from '../auth/middleware'
-import { getPlanCapabilities } from '../plan'
 
 export const functionsRoutes = new Hono<AppEnv>()
 
-// Status e capacidades de funções (detecção Free vs Paid)
+// Status e capacidades de funções (opt-in via ENABLE_FUNCTIONS)
 functionsRoutes.get('/status', async (c) => {
-  const capabilities = await getPlanCapabilities()
+  const bindings = await getBindings()
+  const isEnabled = bindings.ENABLE_FUNCTIONS === 'true'
+
   return c.json({
     success: true,
-    data: capabilities,
+    data: {
+      functionsEnabled: isEnabled,
+      runtime: isEnabled ? 'Cloudflare Worker Loader / Dynamic Workers' : 'disabled',
+      notice: !isEnabled
+        ? 'Edge Functions estão desabilitadas por padrão no plano Free. Para habilitar em planos pagos da Cloudflare, defina ENABLE_FUNCTIONS=true no wrangler.jsonc.'
+        : undefined,
+    },
   })
 })
 
 // Listar webhooks cadastrados
 functionsRoutes.get('/webhooks', requireAdmin(), async (c) => {
   const db = await getDb()
-  const list = await db.select().from(webhooks).all()
+  const list = await db.select().from(ekWebhooks).all()
   return c.json({ success: true, data: list })
 })
 
 // Cadastrar novo webhook
 functionsRoutes.post('/webhooks', requireAdmin(), async (c) => {
-  const body = await c.req.json()
+  const body = await c.req.json().catch(() => ({}))
   const db = await getDb()
 
   if (!body.url || !body.name) {
@@ -48,7 +55,7 @@ functionsRoutes.post('/webhooks', requireAdmin(), async (c) => {
     updatedAt: now,
   }
 
-  await db.insert(webhooks).values(newWebhook)
+  await db.insert(ekWebhooks).values(newWebhook)
   return c.json({ success: true, data: newWebhook }, 201)
 })
 
@@ -56,17 +63,17 @@ functionsRoutes.post('/webhooks', requireAdmin(), async (c) => {
 functionsRoutes.delete('/webhooks/:id', requireAdmin(), async (c) => {
   const id = c.req.param('id')
   const db = await getDb()
-  await db.delete(webhooks).where(eq(webhooks.id, id))
+  await db.delete(ekWebhooks).where(eq(ekWebhooks.id, id))
   return c.json({ success: true, message: 'Webhook removido com sucesso.' })
 })
 
-// Execução de Dynamic Worker (Workers for Platforms)
+// Execução de Dynamic Worker (Opt-in com ENABLE_FUNCTIONS=true)
 functionsRoutes.all('/dynamic/:scriptName/*', requireAuth(), async (c) => {
   const scriptName = c.req.param('scriptName')
   const bindings = await getBindings()
 
-  const isEnabled = bindings.ENABLE_DYNAMIC_WORKERS === 'true'
-  const dispatcher = (bindings as any).DISPATCHER
+  const isEnabled = bindings.ENABLE_FUNCTIONS === 'true'
+  const dispatcher = (bindings as any).DISPATCHER || (bindings as any).LOADER
 
   if (!isEnabled || !dispatcher) {
     return c.json(
@@ -75,9 +82,9 @@ functionsRoutes.all('/dynamic/:scriptName/*', requireAuth(), async (c) => {
         error: {
           code: 'DYNAMIC_WORKERS_UNAVAILABLE',
           message:
-            'Dynamic Workers requerem o plano Cloudflare Workers for Platforms (pago). No plano gratuito, utilize os Webhooks HTTP e Event Hooks nativos.',
+            'Dynamic Workers requerem o plano Cloudflare Workers Paid. No plano gratuito, utilize Webhooks HTTP e Event Hooks nativos.',
           howToEnable:
-            'Para habilitar no plano pago da Cloudflare, defina ENABLE_DYNAMIC_WORKERS=true no wrangler.jsonc e configure o dispatch namespace.',
+            'Para habilitar no plano pago da Cloudflare, defina ENABLE_FUNCTIONS=true no wrangler.jsonc.',
         },
       },
       501,
@@ -94,7 +101,7 @@ functionsRoutes.all('/dynamic/:scriptName/*', requireAuth(), async (c) => {
         success: false,
         error: {
           code: 'DYNAMIC_WORKER_EXECUTION_ERROR',
-          message: `Falha ao executar o Dynamic Worker "${scriptName}": ${err.message}`,
+          message: `Falha ao executar a Edge Function "${scriptName}": ${err.message}`,
         },
       },
       500,

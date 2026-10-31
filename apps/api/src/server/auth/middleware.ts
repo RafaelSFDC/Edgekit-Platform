@@ -4,11 +4,24 @@ import type { AppEnv } from '../types'
 import { getDatabaseRuntime } from '../db'
 import { getSessionFromHeaders } from './index'
 import { validateApiKey } from './keys'
-
-export const AUTH_COOKIE_NAME = 'edgekit_platform_session'
+import { ADMIN_COOKIE_NAME, validateAdminSession } from './admin-auth'
 
 export function authContextMiddleware(): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
+    const runtime = await getDatabaseRuntime()
+    const db = runtime.db
+
+    // 1. Checa Sessão Administrativa do Painel (Cookie HttpOnly)
+    const adminSessionToken = getCookie(c, ADMIN_COOKIE_NAME)
+    if (adminSessionToken) {
+      const admin = await validateAdminSession(db, adminSessionToken)
+      if (admin) {
+        c.set('admin', admin)
+        c.set('role', admin.role)
+      }
+    }
+
+    // 2. Checa Chave de API (Headers ou Query)
     const rawApiKey =
       c.req.header('apikey') ||
       c.req.header('x-api-key') ||
@@ -20,29 +33,38 @@ export function authContextMiddleware(): MiddlewareHandler<AppEnv> {
       bearerToken = authHeader.slice(7).trim()
     }
 
-    const sessionCookie = getCookie(c, AUTH_COOKIE_NAME)
-
-    const keyToValidate =
+    // Se o Bearer token for uma API key (ex: ek_sec_ ou ek_anon_)
+    const candidateApiKey =
       rawApiKey ||
-      sessionCookie ||
-      (bearerToken && bearerToken.length > 0 ? bearerToken : undefined)
+      (bearerToken && (bearerToken.startsWith('ek_') || bearerToken.startsWith('hb_'))
+        ? bearerToken
+        : undefined)
 
-    if (keyToValidate) {
-      const runtime = await getDatabaseRuntime()
-      const validated = await validateApiKey(runtime.db, keyToValidate)
-      if (validated) {
-        c.set('apiKey', validated)
-        c.set('role', validated.role)
+    if (candidateApiKey) {
+      const validatedKey = await validateApiKey(db, candidateApiKey)
+      if (validatedKey) {
+        c.set('apiKey', validatedKey)
+        if (validatedKey.type === 'service_role') {
+          c.set('role', 'service_role')
+        } else if (!c.get('role')) {
+          c.set('role', 'anon')
+        }
       }
     }
 
-    const sessionData = await getSessionFromHeaders(c.req.raw.headers)
-    if (sessionData?.user) {
-      c.set('user', sessionData.user)
-      c.set('session', sessionData.session)
-      c.set('role', (sessionData.user as any).role || 'user')
+    // 3. Checa Sessão de Usuário Final da Aplicação (Better Auth)
+    if (!c.get('admin') && c.get('role') !== 'service_role') {
+      const sessionData = await getSessionFromHeaders(c.req.raw.headers)
+      if (sessionData?.user) {
+        c.set('user', sessionData.user)
+        c.set('session', sessionData.session)
+        if (!c.get('role')) {
+          c.set('role', 'user')
+        }
+      }
     }
 
+    // 4. Fallback padrão: anônimo
     if (!c.get('role')) {
       c.set('role', 'anon')
     }
@@ -51,21 +73,33 @@ export function authContextMiddleware(): MiddlewareHandler<AppEnv> {
   }
 }
 
-export function requireAuth(): MiddlewareHandler<AppEnv> {
+/**
+ * Exige que a requisição seja feita por um Administrador da Plataforma (membro em _ek_admins)
+ * ou por um backend autorizado utilizando a chave secreta (service_role).
+ *
+ * CRÍTICO: Um usuário final cadastrado na tabela `users` do app NUNCA passa nesta checagem!
+ */
+export function requireAdmin(): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
-    const user = c.get('user')
+    const admin = c.get('admin')
     const apiKey = c.get('apiKey')
+    const role = c.get('role')
 
-    if (!user && (!apiKey || apiKey.type === 'anon')) {
+    const isPlatformAdmin =
+      Boolean(admin) ||
+      role === 'service_role' ||
+      apiKey?.type === 'service_role'
+
+    if (!isPlatformAdmin) {
       return c.json(
         {
           success: false,
           error: {
-            code: 'UNAUTHORIZED',
-            message: 'Autenticação necessária. Forneça uma chave de API ou efetue login.',
+            code: 'FORBIDDEN',
+            message: 'Acesso restrito a administradores da plataforma ou service_role_key.',
           },
         },
-        401,
+        403,
       )
     }
 
@@ -73,27 +107,32 @@ export function requireAuth(): MiddlewareHandler<AppEnv> {
   }
 }
 
-export function requireAdmin(): MiddlewareHandler<AppEnv> {
+/**
+ * Exige que a requisição seja autenticada (seja por admin da plataforma, usuário final ou service role).
+ */
+export function requireAuth(): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
-    const role = c.get('role')
+    const admin = c.get('admin')
     const user = c.get('user')
     const apiKey = c.get('apiKey')
+    const role = c.get('role')
 
-    const isAdmin =
-      role === 'admin' ||
-      user?.role === 'admin' ||
+    const isAuthenticated =
+      Boolean(admin) ||
+      Boolean(user) ||
+      role === 'service_role' ||
       apiKey?.type === 'service_role'
 
-    if (!isAdmin) {
+    if (!isAuthenticated) {
       return c.json(
         {
           success: false,
           error: {
-            code: 'FORBIDDEN',
-            message: 'Acesso restrito a administradores ou service_role_key.',
+            code: 'UNAUTHORIZED',
+            message: 'Autenticação necessária para acessar este recurso.',
           },
         },
-        403,
+        401,
       )
     }
 

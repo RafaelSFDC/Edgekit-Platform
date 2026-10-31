@@ -155,11 +155,9 @@ async function setupCloudflare() {
 
   if (serviceRoleKey) {
     putSecret('EDGEKIT_SERVICE_ROLE_KEY', serviceRoleKey)
-    putSecret('HONOBASE_SERVICE_ROLE_KEY', serviceRoleKey)
   }
   if (anonKey) {
     putSecret('EDGEKIT_ANON_KEY', anonKey)
-    putSecret('HONOBASE_ANON_KEY', anonKey)
   }
   if (authSecret) {
     putSecret('BETTER_AUTH_SECRET', authSecret)

@@ -1,100 +1,147 @@
 import { eq } from 'drizzle-orm'
 import { nanoid } from 'nanoid'
 import type { AppDatabase } from '../db'
-import { apiKeys } from '../db/schema'
+import { ekApiKeys } from '../db/schema'
 import { getBindings } from '../env'
+import { hashToken } from './admin-auth'
 
 export interface ValidatedApiKey {
   id: string
   name: string
-  type: 'anon' | 'service_role' | 'custom'
-  role: 'anon' | 'admin' | 'user'
-  userId?: string | null
+  type: 'anon' | 'service_role'
+  role: 'anon' | 'service_role'
 }
 
+/**
+ * Cria uma nova Chave de API, gravando apenas o hash SHA-256 no banco
+ * e retornando a chave bruta exatamente uma vez para o desenvolvedor.
+ */
+export async function createApiKey(
+  db: AppDatabase,
+  options: {
+    name: string
+    type: 'anon' | 'service_role'
+    expiresAt?: Date | null
+  },
+): Promise<{ rawKey: string; keyId: string; keyPrefix: string }> {
+  const prefix = options.type === 'service_role' ? 'ek_sec_' : 'ek_anon_'
+  const randomPart = crypto.randomUUID().replace(/-/g, '') + nanoid(16)
+  const rawKey = `${prefix}${randomPart}`
+  const keyPrefix = `${rawKey.slice(0, 14)}...`
+  const keyHash = await hashToken(rawKey)
+  const id = nanoid()
+  const now = new Date()
+
+  await db.insert(ekApiKeys).values({
+    id,
+    name: options.name,
+    keyPrefix,
+    keyHash,
+    type: options.type,
+    role: options.type === 'service_role' ? 'service_role' : 'anon',
+    expiresAt: options.expiresAt,
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  return { rawKey, keyId: id, keyPrefix }
+}
+
+/**
+ * Garante a criação segura das chaves essenciais na primeira inicialização,
+ * utilizando variáveis de ambiente ou gerando chaves seguras (sem defaults hardcoded).
+ */
 export async function ensureDefaultKeys(db: AppDatabase): Promise<void> {
   const bindings = await getBindings()
-  const anonKey =
-    bindings.EDGEKIT_ANON_KEY ||
-    bindings.HONOBASE_ANON_KEY ||
-    'hb_anon_default'
-  const serviceRoleKey =
-    bindings.EDGEKIT_SERVICE_ROLE_KEY ||
-    bindings.EDGEKIT_APP_SECRET ||
-    bindings.DEFAULT_APP_SECRET ||
-    bindings.HONOBASE_SERVICE_ROLE_KEY ||
-    'hb_service_default'
   const now = new Date()
 
   try {
-    const existingAnon = await db
-      .select()
-      .from(apiKeys)
-      .where(eq(apiKeys.key, anonKey))
-      .get()
+    // 1. Chave Anon
+    const envAnonKey = bindings.EDGEKIT_ANON_KEY
+    if (envAnonKey && envAnonKey.trim()) {
+      const anonHash = await hashToken(envAnonKey.trim())
+      const existingAnon = await db
+        .select()
+        .from(ekApiKeys)
+        .where(eq(ekApiKeys.keyHash, anonHash))
+        .get()
 
-    if (!existingAnon) {
-      await db.insert(apiKeys).values({
-        id: nanoid(),
-        name: 'Default Anon Key',
-        key: anonKey,
-        type: 'anon',
-        role: 'anon',
-        createdAt: now,
-        updatedAt: now,
-      })
+      if (!existingAnon) {
+        await db.insert(ekApiKeys).values({
+          id: nanoid(),
+          name: 'Environment Anon Key',
+          keyPrefix: `${envAnonKey.slice(0, 14)}...`,
+          keyHash: anonHash,
+          type: 'anon',
+          role: 'anon',
+          createdAt: now,
+          updatedAt: now,
+        })
+      }
     }
 
-    const existingService = await db
-      .select()
-      .from(apiKeys)
-      .where(eq(apiKeys.key, serviceRoleKey))
-      .get()
+    // 2. Chave Service Role
+    const envServiceKey =
+      bindings.EDGEKIT_SERVICE_ROLE_KEY || bindings.EDGEKIT_APP_SECRET
+    if (envServiceKey && envServiceKey.trim()) {
+      const serviceHash = await hashToken(envServiceKey.trim())
+      const existingService = await db
+        .select()
+        .from(ekApiKeys)
+        .where(eq(ekApiKeys.keyHash, serviceHash))
+        .get()
 
-    if (!existingService) {
-      await db.insert(apiKeys).values({
-        id: nanoid(),
-        name: 'Default Service Role Key',
-        key: serviceRoleKey,
-        type: 'service_role',
-        role: 'admin',
-        createdAt: now,
-        updatedAt: now,
-      })
+      if (!existingService) {
+        await db.insert(ekApiKeys).values({
+          id: nanoid(),
+          name: 'Environment Service Role Key',
+          keyPrefix: `${envServiceKey.slice(0, 14)}...`,
+          keyHash: serviceHash,
+          type: 'service_role',
+          role: 'service_role',
+          createdAt: now,
+          updatedAt: now,
+        })
+      }
+    }
+
+    // Se nenhuma chave existir de nenhuma forma, cria o par inicial
+    const allKeys = await db.select().from(ekApiKeys).all()
+    if (allKeys.length === 0) {
+      await createApiKey(db, { name: 'Default Anon Key', type: 'anon' })
+      await createApiKey(db, { name: 'Default Service Role Key', type: 'service_role' })
     }
   } catch {
-    // Tabela pode ainda estar sendo criada no primeiro bootstrap
+    // Banco pode estar na primeira inicialização
   }
 }
 
+/**
+ * Valida a chave de API comparando o hash SHA-256 com os registros em _ek_api_keys
+ */
 export async function validateApiKey(
   db: AppDatabase,
   keyString: string,
 ): Promise<ValidatedApiKey | null> {
-  if (!keyString) return null
+  if (!keyString || !keyString.trim()) return null
 
+  const cleanKey = keyString.trim()
   const bindings = await getBindings()
 
-  // Checagem rápida de memória contra as envs padrão
-  const masterServiceKey =
-    bindings.EDGEKIT_SERVICE_ROLE_KEY ||
-    bindings.EDGEKIT_APP_SECRET ||
-    bindings.DEFAULT_APP_SECRET ||
-    bindings.HONOBASE_SERVICE_ROLE_KEY
-
-  if (masterServiceKey && keyString === masterServiceKey) {
+  // Checagem rápida de env vars
+  const envServiceKey =
+    bindings.EDGEKIT_SERVICE_ROLE_KEY || bindings.EDGEKIT_APP_SECRET
+  if (envServiceKey && cleanKey === envServiceKey) {
     return {
       id: 'env_service_role',
       name: 'Environment Service Role Key',
       type: 'service_role',
-      role: 'admin',
+      role: 'service_role',
     }
   }
 
-  const defaultAnonKey =
-    bindings.EDGEKIT_ANON_KEY || bindings.HONOBASE_ANON_KEY
-
-  if (defaultAnonKey && keyString === defaultAnonKey) {
+  const envAnonKey = bindings.EDGEKIT_ANON_KEY
+  if (envAnonKey && cleanKey === envAnonKey) {
     return {
       id: 'env_anon',
       name: 'Environment Anon Key',
@@ -104,10 +151,11 @@ export async function validateApiKey(
   }
 
   try {
+    const keyHash = await hashToken(cleanKey)
     const found = await db
       .select()
-      .from(apiKeys)
-      .where(eq(apiKeys.key, keyString))
+      .from(ekApiKeys)
+      .where(eq(ekApiKeys.keyHash, keyHash))
       .get()
 
     if (!found) return null
@@ -119,9 +167,8 @@ export async function validateApiKey(
     return {
       id: found.id,
       name: found.name,
-      type: found.type as 'anon' | 'service_role' | 'custom',
-      role: found.role as 'anon' | 'admin' | 'user',
-      userId: found.userId,
+      type: found.type as 'anon' | 'service_role',
+      role: found.role as 'anon' | 'service_role',
     }
   } catch {
     return null

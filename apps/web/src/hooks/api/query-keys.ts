@@ -42,4 +42,8 @@ export const queryKeys = {
     all: ['keys'] as const,
     detail: () => ['keys', 'detail'] as const,
   },
+  webhooks: {
+    all: ['webhooks'] as const,
+    list: () => ['webhooks', 'list'] as const,
+  },
 };

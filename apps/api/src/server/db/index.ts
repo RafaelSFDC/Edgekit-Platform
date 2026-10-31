@@ -36,10 +36,10 @@ export type DatabaseRuntime =
 async function applyD1Migrations(db: AppDatabase) {
   try {
     await db.run(
-      sql`CREATE TABLE IF NOT EXISTS __honobase_migrations (tag text PRIMARY KEY)`,
+      sql`CREATE TABLE IF NOT EXISTS _ek_migrations (tag text PRIMARY KEY)`,
     )
 
-    const appliedRows = await db.values(sql`SELECT tag FROM __honobase_migrations`)
+    const appliedRows = await db.values(sql`SELECT tag FROM _ek_migrations`)
     const applied = new Set(appliedRows.map((row) => String(row[0])))
 
     for (const migration of bundledMigrations) {
@@ -69,7 +69,7 @@ async function applyD1Migrations(db: AppDatabase) {
       }
 
       await db.run(
-        sql`INSERT INTO __honobase_migrations (tag) VALUES (${migration.tag})`,
+        sql`INSERT INTO _ek_migrations (tag) VALUES (${migration.tag})`,
       )
       console.info(`[D1 Bootstrap] Migração aplicada com sucesso: ${migration.tag}`)
     }
@@ -115,9 +115,6 @@ export async function getDatabaseRuntime(): Promise<DatabaseRuntime> {
     }
 
     const db = d1DbInstance
-
-    // Auto-bootstrap universal: garante que tanto em Dev quanto em Produção (D1)
-    // as tabelas do sistema existam mesmo em novos deploys.
     await ensureD1Ready(db)
 
     return {
@@ -132,8 +129,14 @@ export async function getDatabaseRuntime(): Promise<DatabaseRuntime> {
   if (typeof process !== 'undefined') {
     const { existsSync } = await import('node:fs')
     const { resolve } = await import('node:path')
-    if (!existsSync(currentPath) && existsSync(resolve(process.cwd(), '../../', rawPath))) {
-      currentPath = resolve(process.cwd(), '../../', rawPath)
+    if (!existsSync(currentPath)) {
+      for (const parent of [resolve(process.cwd(), '..'), resolve(process.cwd(), '../..')]) {
+        const candidate = resolve(parent, rawPath)
+        if (existsSync(candidate)) {
+          currentPath = candidate
+          break
+        }
+      }
     }
   }
 
@@ -152,9 +155,14 @@ export async function getDatabaseRuntime(): Promise<DatabaseRuntime> {
 
     const { existsSync } = await import('node:fs')
     const { resolve } = await import('node:path')
-    const migrationsFolder = existsSync('./drizzle')
-      ? './drizzle'
-      : resolve(process.cwd(), '../../drizzle')
+    let migrationsFolder = './drizzle'
+    for (const dir of [process.cwd(), resolve(process.cwd(), '..'), resolve(process.cwd(), '../..')]) {
+      const candidate = resolve(dir, 'drizzle')
+      if (existsSync(candidate)) {
+        migrationsFolder = candidate
+        break
+      }
+    }
 
     try {
       if (existsSync(migrationsFolder)) {

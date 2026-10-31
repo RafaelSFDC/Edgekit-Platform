@@ -42,14 +42,6 @@ async function setup() {
       /EDGEKIT_SERVICE_ROLE_KEY=.*/,
       `EDGEKIT_SERVICE_ROLE_KEY=${keys.serviceRoleKey}`,
     )
-    template = template.replace(
-      /HONOBASE_ANON_KEY=.*/,
-      `HONOBASE_ANON_KEY=${keys.anonKey}`,
-    )
-    template = template.replace(
-      /HONOBASE_SERVICE_ROLE_KEY=.*/,
-      `HONOBASE_SERVICE_ROLE_KEY=${keys.serviceRoleKey}`,
-    )
 
     fs.writeFileSync(envPath, template)
     console.info('✅ Arquivo .env gerado com chaves secretas únicas e seguras!')

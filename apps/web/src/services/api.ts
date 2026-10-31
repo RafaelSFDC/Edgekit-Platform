@@ -7,6 +7,7 @@ import type {
   PlatformKeys,
   TablePolicy,
   SecuritySettings,
+  WebhookInfo,
 } from '../types';
 
 export class ApiError extends Error {
@@ -323,6 +324,76 @@ export async function deleteFile(bucket: string, key: string): Promise<boolean> 
   return true;
 }
 
+export async function fetchBuckets(): Promise<any[]> {
+  const res = await fetch(`${API_BASE}/api/v1/storage/buckets`, {
+    headers: getHeaders(),
+  });
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao listar buckets.', res.status);
+  }
+  return json.data || [];
+}
+
+export async function createBucket(data: {
+  name: string;
+  isPublic?: boolean;
+  maxSizeBytes?: number;
+  allowedMimeTypes?: string[];
+  readRule?: string;
+  writeRule?: string;
+}): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/v1/storage/buckets`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao criar bucket.', res.status);
+  }
+  return json.data;
+}
+
+export async function updateBucket(
+  name: string,
+  data: {
+    isPublic?: boolean;
+    maxSizeBytes?: number;
+    allowedMimeTypes?: string[];
+    readRule?: string;
+    writeRule?: string;
+  }
+): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/v1/storage/buckets/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao atualizar bucket.', res.status);
+  }
+  return json.data;
+}
+
+export async function generateSignedUrl(
+  bucket: string,
+  key: string,
+  expiresInSeconds = 3600
+): Promise<{ url: string; expiresAt: string }> {
+  const res = await fetch(`${API_BASE}/api/v1/storage/${encodeURIComponent(bucket)}/signed-url`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ key, expiresInSeconds }),
+  });
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao gerar link assinado.', res.status);
+  }
+  return json.data;
+}
+
 export async function fetchKeys(): Promise<PlatformKeys> {
   const res = await fetch(`${API_BASE}/api/v1/admin/keys`, {
     headers: getHeaders(),
@@ -479,4 +550,174 @@ export async function adminDeleteUser(id: string): Promise<any> {
   }
   return json;
 }
+
+export async function fetchUserSessions(userId: string): Promise<any[]> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/users/${encodeURIComponent(userId)}/sessions`, {
+    headers: getHeaders(),
+  });
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao carregar sessões.', res.status);
+  }
+  return json.data || [];
+}
+
+export async function revokeSession(sessionId: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao revogar sessão.', res.status);
+  }
+  return json;
+}
+
+export async function fetchOrganizations(): Promise<any[]> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/organizations`, {
+    headers: getHeaders(),
+  });
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao carregar organizações.', res.status);
+  }
+  return json.data || [];
+}
+
+export async function createOrganization(data: { name: string; slug: string }): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/organizations`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao criar organização.', res.status);
+  }
+  return json.data;
+}
+
+export async function fetchOrganizationMembers(orgId: string): Promise<any[]> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/organizations/${encodeURIComponent(orgId)}/members`, {
+    headers: getHeaders(),
+  });
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao carregar membros da organização.', res.status);
+  }
+  return json.data || [];
+}
+
+export async function addOrganizationMember(orgId: string, data: { userId: string; role?: string }): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/organizations/${encodeURIComponent(orgId)}/members`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao adicionar membro.', res.status);
+  }
+  return json;
+}
+
+export async function removeOrganizationMember(orgId: string, userId: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/organizations/${encodeURIComponent(orgId)}/members/${encodeURIComponent(userId)}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao remover membro da organização.', res.status);
+  }
+  return json;
+}
+
+// =========================================================================
+// GESTÃO DE WEBHOOKS
+// =========================================================================
+
+export async function fetchWebhooks(): Promise<WebhookInfo[]> {
+  const res = await fetch(`${API_BASE}/api/v1/webhooks`, {
+    headers: getHeaders(),
+  });
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao listar webhooks.', res.status);
+  }
+  return json.data || [];
+}
+
+export async function createWebhook(data: {
+  name: string;
+  url: string;
+  events?: string[];
+  secret?: string;
+  enabled?: boolean;
+}): Promise<WebhookInfo> {
+  const res = await fetch(`${API_BASE}/api/v1/webhooks`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao criar webhook.', res.status);
+  }
+  return json.data;
+}
+
+export async function updateWebhook(
+  id: string,
+  data: Partial<{
+    name: string;
+    url: string;
+    events: string[];
+    secret: string;
+    enabled: boolean;
+  }>,
+): Promise<WebhookInfo> {
+  const res = await fetch(`${API_BASE}/api/v1/webhooks/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao atualizar webhook.', res.status);
+  }
+  return json.data;
+}
+
+export async function deleteWebhook(id: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/v1/webhooks/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao excluir webhook.', res.status);
+  }
+  return json;
+}
+
+export async function testWebhook(id: string): Promise<{
+  statusCode: number;
+  statusText: string;
+  latencyMs: number;
+  responseSnippet: string;
+  signatureSent: string | null;
+}> {
+  const res = await fetch(`${API_BASE}/api/v1/webhooks/${encodeURIComponent(id)}/test`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha no teste de envio do webhook.', res.status);
+  }
+  return json.data;
+}
+
 

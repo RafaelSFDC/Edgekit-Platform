@@ -8,6 +8,13 @@ import {
   adminCreateUser,
   adminUpdateUserRole,
   adminDeleteUser,
+  fetchUserSessions,
+  revokeSession,
+  fetchOrganizations,
+  createOrganization,
+  fetchOrganizationMembers,
+  addOrganizationMember,
+  removeOrganizationMember,
 } from '../../services/api';
 
 export function useSetupStatusQuery() {
@@ -83,6 +90,92 @@ export function useAdminDeleteUserMutation() {
       });
       queryClient.invalidateQueries({
         queryKey: queryKeys.stats.detail(),
+      });
+    },
+  });
+}
+
+export function useUserSessionsQuery(userId: string) {
+  return useQuery({
+    queryKey: ['auth', 'users', userId, 'sessions'],
+    queryFn: () => fetchUserSessions(userId),
+    enabled: Boolean(userId),
+  });
+}
+
+export function useRevokeSessionMutation(userId?: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (sessionId: string) => revokeSession(sessionId),
+    onSuccess: () => {
+      if (userId) {
+        queryClient.invalidateQueries({
+          queryKey: ['auth', 'users', userId, 'sessions'],
+        });
+      }
+      queryClient.invalidateQueries({
+        queryKey: ['database', 'rows', 'sessions'],
+      });
+    },
+  });
+}
+
+export function useOrganizationsQuery() {
+  return useQuery({
+    queryKey: ['auth', 'organizations'],
+    queryFn: fetchOrganizations,
+    staleTime: 30 * 1000,
+  });
+}
+
+export function useCreateOrganizationMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { name: string; slug: string }) => createOrganization(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['auth', 'organizations'],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['database', 'rows', 'organizations'],
+      });
+    },
+  });
+}
+
+export function useOrganizationMembersQuery(orgId: string) {
+  return useQuery({
+    queryKey: ['auth', 'organizations', orgId, 'members'],
+    queryFn: () => fetchOrganizationMembers(orgId),
+    enabled: Boolean(orgId),
+  });
+}
+
+export function useAddOrganizationMemberMutation(orgId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { userId: string; role?: string }) => addOrganizationMember(orgId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['auth', 'organizations', orgId, 'members'],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['auth', 'organizations'],
+      });
+    },
+  });
+}
+
+export function useRemoveOrganizationMemberMutation(orgId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) => removeOrganizationMember(orgId, userId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['auth', 'organizations', orgId, 'members'],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['auth', 'organizations'],
       });
     },
   });

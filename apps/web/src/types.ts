@@ -62,10 +62,10 @@ export interface PlatformKeys {
 export interface TablePolicy {
   tableName: string;
   rlsEnabled?: boolean;
-  selectRule?: 'public' | 'authenticated' | 'owner' | 'admin' | 'disabled';
-  insertRule?: 'public' | 'authenticated' | 'owner' | 'admin' | 'disabled';
-  updateRule?: 'public' | 'authenticated' | 'owner' | 'admin' | 'disabled';
-  deleteRule?: 'public' | 'authenticated' | 'owner' | 'admin' | 'disabled';
+  selectRule?: 'public' | 'authenticated' | 'owner' | 'org_member' | 'admin' | 'disabled' | 'custom_sql';
+  insertRule?: 'public' | 'authenticated' | 'owner' | 'org_member' | 'admin' | 'disabled' | 'custom_sql';
+  updateRule?: 'public' | 'authenticated' | 'owner' | 'org_member' | 'admin' | 'disabled' | 'custom_sql';
+  deleteRule?: 'public' | 'authenticated' | 'owner' | 'org_member' | 'admin' | 'disabled' | 'custom_sql';
   ownerColumn?: string;
   readLevel?: string;
   writeLevel?: string;
@@ -83,4 +83,15 @@ export interface RealtimeMessage {
   event: string;
   payload: any;
   timestamp: number;
+}
+
+export interface WebhookInfo {
+  id: string;
+  name: string;
+  url: string;
+  events: string;
+  secret?: string | null;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
 }

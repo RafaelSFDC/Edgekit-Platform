@@ -1,6 +1,6 @@
 import { betterAuth } from 'better-auth'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
-import { bearer, admin } from 'better-auth/plugins'
+import { bearer, admin, organization, twoFactor, magicLink, emailOTP } from 'better-auth/plugins'
 import { getDatabaseRuntime, schema } from '../db'
 import { getBindings } from '../env'
 import { ensureDefaultKeys } from './keys'
@@ -15,9 +15,9 @@ export async function getAuth() {
   const runtime = await getDatabaseRuntime()
   const bindings = await getBindings()
   const baseUrl = bindings.APP_URL || 'http://localhost:3000'
-  const secret = bindings.BETTER_AUTH_SECRET || 'dev-secret-hono-base-change-in-production'
+  const secret = bindings.BETTER_AUTH_SECRET || 'dev-edgekit-platform-secret-change-in-production'
 
-  // Garante as chaves de API padrão no banco
+  // Garante as chaves de API essenciais no banco de forma segura
   await ensureDefaultKeys(runtime.db)
 
   cachedAuth = betterAuth({
@@ -31,11 +31,29 @@ export async function getAuth() {
         session: schema.sessions,
         account: schema.accounts,
         verification: schema.verifications,
+        organization: schema.organizations,
+        member: schema.members,
+        invitation: schema.invitations,
+        twoFactor: schema.twoFactors,
       },
     }),
     plugins: [
       bearer(),
       admin(),
+      organization(),
+      twoFactor({
+        issuer: 'Edgekit Platform',
+      }),
+      magicLink({
+        sendMagicLink: async ({ email, url }) => {
+          console.log(`[Edgekit Auth MagicLink] Sent to ${email}: ${url}`)
+        },
+      }),
+      emailOTP({
+        sendVerificationOTP: async ({ email, otp, type }) => {
+          console.log(`[Edgekit Auth EmailOTP] Sent to ${email} (type: ${type}): ${otp}`)
+        },
+      }),
     ],
     session: {
       cookieCache: {
