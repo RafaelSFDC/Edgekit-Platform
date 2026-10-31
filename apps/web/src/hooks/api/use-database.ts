@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from './query-keys';
 import { queryDefaults } from './query-defaults';
+import type { TablePolicy } from '../../types';
 import {
   fetchTables,
   fetchTableRows,
@@ -119,7 +120,7 @@ export function useUpdateTablePolicyMutation() {
       policy,
     }: {
       table: string;
-      policy: { readLevel: string; writeLevel: string };
+      policy: Partial<TablePolicy>;
     }) => updateTablePolicy(table, policy),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Table,
   Play,
@@ -12,6 +12,14 @@ import {
   Layers,
   Pencil,
   Search,
+  Code2,
+  Lock,
+  Globe,
+  UserCheck,
+  Copy,
+  Check,
+  Sliders,
+  Sparkles,
 } from 'lucide-react';
 import { useI18n } from '../i18n/context';
 import {
@@ -26,6 +34,7 @@ import {
   useCreateTableMutation,
   useDropTableMutation,
 } from '../hooks/api/use-database';
+import { usePlatformKeysQuery } from '../hooks/api/use-auth';
 import { PageLayout } from '../components/layout/PageLayout';
 import { PageHeader } from '@/components/ui/page-header';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
@@ -40,6 +49,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
+import type { TablePolicy } from '../types';
 
 interface ColumnDef {
   name: string;
@@ -68,13 +78,15 @@ const SYSTEM_TABLES = new Set([
 
 export const DatabasePage: React.FC = () => {
   const { t } = useI18n();
-  const [activeTab, setActiveTab] = useState<'data' | 'sql'>('data');
+  const [activeMainTab, setActiveMainTab] = useState<'explorer' | 'sql'>('explorer');
+  const [tableSubTab, setTableSubTab] = useState<'data' | 'rls' | 'api'>('data');
   const [selectedTable, setSelectedTable] = useState<string>('');
 
   // Queries
   const { data: tables = [], refetch: refetchTables, isLoading: loadingTables } = useTablesQuery();
   const currentTable = selectedTable || (tables.length > 0 ? tables[0].name : '');
   const { data: rows = [], refetch: refetchRows, isLoading: loadingRows } = useTableRowsQuery(currentTable);
+  const { data: platformKeys = {} } = usePlatformKeysQuery();
 
   // Mutations
   const deleteRowMutation = useDeleteTableRowMutation();
@@ -84,8 +96,27 @@ export const DatabasePage: React.FC = () => {
   const createTableMutation = useCreateTableMutation();
   const dropTableMutation = useDropTableMutation();
 
-  const { data: tablePolicy } = useTablePolicyQuery(currentTable);
+  const { data: rawPolicy, refetch: refetchPolicy } = useTablePolicyQuery(currentTable);
   const updatePolicyMutation = useUpdateTablePolicyMutation();
+
+  // Local RLS Form State
+  const [localPolicy, setLocalPolicy] = useState<Partial<TablePolicy>>({});
+  const [copiedSnippet, setCopiedSnippet] = useState<string | null>(null);
+  const [activeApiSnippet, setActiveApiSnippet] = useState<'get' | 'post' | 'patch' | 'delete' | 'realtime' | 'auth'>('get');
+
+  // Atualiza estado local de política quando carrega a política do servidor
+  React.useEffect(() => {
+    if (rawPolicy) {
+      setLocalPolicy({
+        rlsEnabled: rawPolicy.rlsEnabled ?? true,
+        selectRule: (rawPolicy.selectRule || rawPolicy.readLevel || 'public') as any,
+        insertRule: (rawPolicy.insertRule || rawPolicy.writeLevel || 'authenticated') as any,
+        updateRule: (rawPolicy.updateRule || rawPolicy.writeLevel || 'owner') as any,
+        deleteRule: (rawPolicy.deleteRule || rawPolicy.writeLevel || 'owner') as any,
+        ownerColumn: rawPolicy.ownerColumn || 'user_id',
+      });
+    }
+  }, [rawPolicy, currentTable]);
 
   // SQL Runner state
   const [sqlQuery, setSqlQuery] = useState('SELECT * FROM users LIMIT 10;');
@@ -108,7 +139,8 @@ export const DatabasePage: React.FC = () => {
   const [newTableName, setNewTableName] = useState('');
   const [newTableColumns, setNewTableColumns] = useState<ColumnDef[]>([
     { name: 'id', type: 'TEXT', primaryKey: true, notNull: true },
-    { name: 'name', type: 'TEXT', primaryKey: false, notNull: true },
+    { name: 'title', type: 'TEXT', primaryKey: false, notNull: true },
+    { name: 'user_id', type: 'TEXT', primaryKey: false, notNull: false },
   ]);
 
   // Drop Table State
@@ -146,57 +178,75 @@ export const DatabasePage: React.FC = () => {
   };
 
   const handleInsertRow = async () => {
-    if (!currentTable) return;
     try {
       const parsed = JSON.parse(newRowJson);
       await insertRowMutation.mutateAsync({ table: currentTable, record: parsed });
       toast.success(t.common.success);
       setIsAddOpen(false);
+      setNewRowJson('{\n  "name": "Novo Item",\n  "active": true\n}');
     } catch (err: any) {
       toast.error(err.message || 'JSON inválido');
     }
   };
 
+  const handleOpenEdit = (row: any) => {
+    const id = row.id;
+    if (!id) {
+      toast.error('O registro não possui uma coluna "id" identificadora.');
+      return;
+    }
+    setEditingId(String(id));
+    const clone = { ...row };
+    delete clone.id;
+    setEditRowJson(JSON.stringify(clone, null, 2));
+    setIsEditOpen(true);
+  };
+
   const handleUpdateRow = async () => {
-    if (!currentTable || !editingId) return;
+    if (!editingId || !currentTable) return;
     try {
       const parsed = JSON.parse(editRowJson);
-      const { id: _id, ...updates } = parsed;
       await updateRowMutation.mutateAsync({
         table: currentTable,
         id: editingId,
-        record: updates,
+        record: parsed,
       });
-      toast.success('Registro atualizado com sucesso!');
+      toast.success(t.common.success);
       setIsEditOpen(false);
       setEditingId(null);
     } catch (err: any) {
-      toast.error(err.message || 'JSON inválido ou erro ao atualizar registro.');
+      toast.error(err.message || 'Falha ao atualizar registro.');
     }
   };
 
   const handleAddColumnDef = () => {
-    setNewTableColumns((prev) => [
-      ...prev,
-      { name: '', type: 'TEXT', primaryKey: false, notNull: false },
+    setNewTableColumns([
+      ...newTableColumns,
+      { name: `col_${newTableColumns.length + 1}`, type: 'TEXT', primaryKey: false, notNull: false },
     ]);
   };
 
   const handleRemoveColumnDef = (idx: number) => {
-    setNewTableColumns((prev) => prev.filter((_, i) => i !== idx));
+    setNewTableColumns(newTableColumns.filter((_, i) => i !== idx));
   };
 
-  const handleCreateNewTable = async (e: React.FormEvent) => {
+  const handleColumnChange = (idx: number, field: keyof ColumnDef, val: any) => {
+    const next = [...newTableColumns];
+    next[idx] = { ...next[idx], [field]: val };
+    setNewTableColumns(next);
+  };
+
+  const handleCreateTable = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanName = newTableName.trim();
+    const cleanName = newTableName.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
     if (!cleanName) {
-      toast.error('Informe o nome da tabela.');
+      toast.error('Informe um nome válido para a tabela.');
       return;
     }
 
     const validCols = newTableColumns.filter((c) => c.name.trim().length > 0);
     if (validCols.length === 0) {
-      toast.error('Adicione ao menos uma coluna com nome válido.');
+      toast.error('Adicione ao menos uma coluna.');
       return;
     }
 
@@ -211,7 +261,8 @@ export const DatabasePage: React.FC = () => {
       setNewTableName('');
       setNewTableColumns([
         { name: 'id', type: 'TEXT', primaryKey: true, notNull: true },
-        { name: 'name', type: 'TEXT', primaryKey: false, notNull: true },
+        { name: 'title', type: 'TEXT', primaryKey: false, notNull: true },
+        { name: 'user_id', type: 'TEXT', primaryKey: false, notNull: false },
       ]);
     } catch (err: any) {
       toast.error(err.message || 'Falha ao criar tabela.');
@@ -232,7 +283,170 @@ export const DatabasePage: React.FC = () => {
     }
   };
 
+  // Presets de Políticas estilo Supabase
+  const applyPreset = (preset: 'public_read_owner_write' | 'owner_only' | 'admin_only' | 'fully_public') => {
+    if (preset === 'public_read_owner_write') {
+      setLocalPolicy({
+        ...localPolicy,
+        rlsEnabled: true,
+        selectRule: 'public',
+        insertRule: 'authenticated',
+        updateRule: 'owner',
+        deleteRule: 'owner',
+      });
+      toast.success('Preset aplicado: Público para leitura, Dono para escrita.');
+    } else if (preset === 'owner_only') {
+      setLocalPolicy({
+        ...localPolicy,
+        rlsEnabled: true,
+        selectRule: 'owner',
+        insertRule: 'authenticated',
+        updateRule: 'owner',
+        deleteRule: 'owner',
+      });
+      toast.success('Preset aplicado: Privado (Apenas o Dono acessa).');
+    } else if (preset === 'admin_only') {
+      setLocalPolicy({
+        ...localPolicy,
+        rlsEnabled: true,
+        selectRule: 'admin',
+        insertRule: 'admin',
+        updateRule: 'admin',
+        deleteRule: 'admin',
+      });
+      toast.success('Preset aplicado: Restrito a Administradores.');
+    } else if (preset === 'fully_public') {
+      setLocalPolicy({
+        ...localPolicy,
+        rlsEnabled: false,
+        selectRule: 'public',
+        insertRule: 'public',
+        updateRule: 'public',
+        deleteRule: 'public',
+      });
+      toast.success('Preset aplicado: Totalmente Aberto (Sem restrições).');
+    }
+  };
+
+  const handleSavePolicy = async () => {
+    if (!currentTable) return;
+    try {
+      await updatePolicyMutation.mutateAsync({
+        table: currentTable,
+        policy: localPolicy,
+      });
+      toast.success(`Políticas de RLS para "${currentTable}" salvas com sucesso!`);
+      refetchPolicy();
+    } catch (err: any) {
+      toast.error(err.message || 'Falha ao salvar políticas.');
+    }
+  };
+
+  const copyCode = (code: string, id: string) => {
+    navigator.clipboard.writeText(code);
+    setCopiedSnippet(id);
+    toast.success('Snippet copiado para a área de transferência!');
+    setTimeout(() => setCopiedSnippet(null), 2000);
+  };
+
   const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+  const filteredRows = useMemo(() => {
+    if (!searchTerm.trim()) return rows;
+    const term = searchTerm.toLowerCase();
+    return rows.filter((r) =>
+      Object.values(r).some((v) => String(v).toLowerCase().includes(term)),
+    );
+  }, [rows, searchTerm]);
+
+  // Snippets de Integração Frontend
+  const originUrl = typeof window !== 'undefined' ? window.location.origin : 'https://seu-worker.workers.dev';
+  const anonKey = platformKeys.anonKey || 'hb_anon_default';
+
+  const snippets = useMemo(() => {
+    return {
+      get: `// 1. Consultar registros com filtros e ordenação
+const res = await fetch('${originUrl}/api/v1/db/${currentTable}?limit=10&order=created_at.desc', {
+  headers: {
+    'apikey': '${anonKey}',
+    // Se a tabela exigir Dono (RLS), passe o token do usuário logado:
+    // 'Authorization': 'Bearer ' + userSessionToken,
+  }
+});
+const { data, meta } = await res.json();
+console.log('Registros encontrados:', data);`,
+
+      post: `// 2. Inserir novo registro (O RLS preenche o user_id automaticamente)
+const res = await fetch('${originUrl}/api/v1/db/${currentTable}', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'apikey': '${anonKey}',
+    'Authorization': 'Bearer ' + userSessionToken, // Token obtido no login
+  },
+  body: JSON.stringify({
+    title: 'Meu Novo Item',
+    // user_id é injetado pelo servidor com base no token
+  })
+});
+const { data } = await res.json();
+console.log('Registro criado:', data);`,
+
+      patch: `// 3. Atualizar registro existente (Somente o Dono pode editar se RLS estiver ativo)
+const res = await fetch('${originUrl}/api/v1/db/${currentTable}/ID_DO_REGISTRO', {
+  method: 'PATCH',
+  headers: {
+    'Content-Type': 'application/json',
+    'apikey': '${anonKey}',
+    'Authorization': 'Bearer ' + userSessionToken,
+  },
+  body: JSON.stringify({
+    title: 'Título Atualizado'
+  })
+});
+const { data } = await res.json();
+console.log('Registro atualizado:', data);`,
+
+      delete: `// 4. Excluir registro (Somente o Dono pode deletar se RLS estiver ativo)
+const res = await fetch('${originUrl}/api/v1/db/${currentTable}/ID_DO_REGISTRO', {
+  method: 'DELETE',
+  headers: {
+    'apikey': '${anonKey}',
+    'Authorization': 'Bearer ' + userSessionToken,
+  }
+});
+const result = await res.json();
+console.log('Registro removido com sucesso!');`,
+
+      realtime: `// 5. Escutar alterações em tempo real via WebSocket nativo do navegador
+const wsUrl = '${originUrl.replace('http', 'ws')}/api/v1/realtime/db:${currentTable}/ws?apikey=${anonKey}';
+const socket = new WebSocket(wsUrl);
+
+socket.onopen = () => {
+  console.log('⚡ Conectado ao canal em tempo real de ${currentTable}');
+};
+
+socket.onmessage = (event) => {
+  const { event: action, payload } = JSON.parse(event.data);
+  // action pode ser 'INSERT', 'UPDATE' ou 'DELETE'
+  console.log('Evento CDC recebido:', action, payload);
+};`,
+
+      auth: `// 6. Autenticação no Frontend (Login e Registro via Better-Auth)
+// Cadastro de novo usuário:
+const signUpRes = await fetch('${originUrl}/api/v1/auth/sign-up/email', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    name: 'Nome do Usuário',
+    email: 'user@exemplo.com',
+    password: 'minha-senha-segura-123'
+  })
+});
+const authData = await signUpRes.json();
+// Salve o token retornado para usar em 'Authorization: Bearer <token>'
+const userSessionToken = authData.token || authData.session?.token;`,
+    };
+  }, [originUrl, currentTable, anonKey]);
 
   return (
     <PageLayout>
@@ -242,18 +456,18 @@ export const DatabasePage: React.FC = () => {
         actions={
           <div className="flex items-center gap-1.5 bg-muted p-1 rounded-lg border border-border">
             <Button
-              variant={activeTab === 'data' ? 'default' : 'ghost'}
+              variant={activeMainTab === 'explorer' ? 'default' : 'ghost'}
               size="sm"
-              onClick={() => setActiveTab('data')}
+              onClick={() => setActiveMainTab('explorer')}
               className="text-xs h-7 cursor-pointer"
             >
               <Table className="size-3.5 mr-1.5" />
               {t.database.dataExplorer}
             </Button>
             <Button
-              variant={activeTab === 'sql' ? 'default' : 'ghost'}
+              variant={activeMainTab === 'sql' ? 'default' : 'ghost'}
               size="sm"
-              onClick={() => setActiveTab('sql')}
+              onClick={() => setActiveMainTab('sql')}
               className="text-xs h-7 cursor-pointer"
             >
               <Terminal className="size-3.5 mr-1.5" />
@@ -263,7 +477,7 @@ export const DatabasePage: React.FC = () => {
         }
       />
 
-      {activeTab === 'data' ? (
+      {activeMainTab === 'explorer' ? (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
           {/* Barra Lateral de Tabelas */}
           <Card className="md:col-span-1 h-[calc(100vh-220px)] flex flex-col">
@@ -299,35 +513,37 @@ export const DatabasePage: React.FC = () => {
                 <div className="p-4 text-xs text-muted-foreground text-center">
                   {t.common.loading}
                 </div>
+              ) : tables.length === 0 ? (
+                <div className="p-4 text-xs text-muted-foreground text-center">
+                  {t.database.emptyData}
+                </div>
               ) : (
-                tables.map((tbl) => {
-                  const isSys = SYSTEM_TABLES.has(tbl.name.toLowerCase());
+                tables.map((tItem: any) => {
+                  const isSys = SYSTEM_TABLES.has(tItem.name.toLowerCase());
+                  const isSelected = tItem.name === currentTable;
                   return (
                     <button
-                      key={tbl.name}
-                      type="button"
-                      onClick={() => setSelectedTable(tbl.name)}
-                      className={`w-full text-left px-3 py-2 rounded-lg text-xs flex items-center justify-between transition-colors cursor-pointer ${
-                        currentTable === tbl.name
-                          ? 'bg-primary/10 text-primary border border-primary/20 font-medium'
-                          : 'text-foreground hover:bg-muted'
+                      key={tItem.name}
+                      onClick={() => {
+                        setSelectedTable(tItem.name);
+                        setTableSubTab('data');
+                      }}
+                      className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs transition-colors cursor-pointer text-left ${
+                        isSelected
+                          ? 'bg-primary/10 text-primary font-medium'
+                          : 'text-foreground hover:bg-muted/70'
                       }`}
                     >
-                      <span className="truncate flex items-center gap-1.5">
+                      <div className="flex items-center gap-2 truncate">
                         {isSys ? (
-                          <Shield className="size-3 text-muted-foreground shrink-0" />
+                          <Shield className="size-3.5 text-muted-foreground shrink-0" />
                         ) : (
-                          <Layers className="size-3 text-orange-500 shrink-0" />
+                          <Table className="size-3.5 text-muted-foreground shrink-0" />
                         )}
-                        <span>{tbl.name}</span>
-                      </span>
-                      <Badge
-                        variant={isSys ? 'outline' : 'secondary'}
-                        className={`text-[9px] py-0 px-1 ${
-                          !isSys ? 'bg-orange-500/10 text-orange-500 border border-orange-500/20' : ''
-                        }`}
-                      >
-                        {isSys ? 'Sistema' : 'D1'}
+                        <span className="truncate">{tItem.name}</span>
+                      </div>
+                      <Badge variant="secondary" className="text-[10px] h-4 px-1 shrink-0 font-mono">
+                        {tItem.rowCount ?? 0}
                       </Badge>
                     </button>
                   );
@@ -336,7 +552,7 @@ export const DatabasePage: React.FC = () => {
             </CardContent>
           </Card>
 
-          {/* Área de Dados da Tabela */}
+          {/* Painel Principal com Sub-abas da Tabela */}
           <Card className="md:col-span-3 h-[calc(100vh-220px)] flex flex-col">
             <CardHeader className="p-3 border-b border-border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 space-y-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -351,230 +567,505 @@ export const DatabasePage: React.FC = () => {
                     <Shield className="size-2.5" />
                     Protegida (Admin)
                   </Badge>
-                ) : currentTable ? (
-                  <div className="flex items-center gap-1.5 text-xs bg-muted/40 p-1 rounded-md border border-border/60">
-                    <span className="text-[10px] uppercase font-semibold text-muted-foreground">Acesso:</span>
-                    <select
-                      value={tablePolicy?.readLevel || 'public'}
-                      onChange={async (e) => {
-                        const newRead = e.target.value;
-                        await updatePolicyMutation.mutateAsync({
-                          table: currentTable,
-                          policy: {
-                            readLevel: newRead,
-                            writeLevel: tablePolicy?.writeLevel || 'authenticated',
-                          },
-                        });
-                        toast.success('Política de leitura atualizada!');
-                      }}
-                      className="bg-background text-[11px] font-mono border border-border rounded px-1.5 py-0.5 cursor-pointer text-foreground"
-                    >
-                      <option value="public">Leitura: Pública</option>
-                      <option value="authenticated">Leitura: Autenticada</option>
-                      <option value="admin">Leitura: Admin Only</option>
-                    </select>
-                    <select
-                      value={tablePolicy?.writeLevel || 'authenticated'}
-                      onChange={async (e) => {
-                        const newWrite = e.target.value;
-                        await updatePolicyMutation.mutateAsync({
-                          table: currentTable,
-                          policy: {
-                            readLevel: tablePolicy?.readLevel || 'public',
-                            writeLevel: newWrite,
-                          },
-                        });
-                        toast.success('Política de escrita atualizada!');
-                      }}
-                      className="bg-background text-[11px] font-mono border border-border rounded px-1.5 py-0.5 cursor-pointer text-foreground"
-                    >
-                      <option value="public">Escrita: Pública</option>
-                      <option value="authenticated">Escrita: Autenticada</option>
-                      <option value="admin">Escrita: Admin Only</option>
-                    </select>
-                  </div>
-                ) : null}
+                ) : (
+                  <Badge
+                    variant={localPolicy.rlsEnabled ? 'default' : 'secondary'}
+                    className="text-[10px] gap-1"
+                  >
+                    <Lock className="size-2.5" />
+                    {localPolicy.rlsEnabled ? 'RLS Ativo' : 'RLS Desativado'}
+                  </Badge>
+                )}
               </div>
 
-              <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
-                <div className="relative">
-                  <Search className="size-3.5 absolute left-2 top-2 text-muted-foreground" />
-                  <input
-                    type="text"
-                    placeholder="Filtrar dados..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-7 pr-2 py-1 text-xs bg-muted/60 border border-border rounded-md text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-primary w-28 sm:w-36"
-                  />
-                </div>
-
-                {!isCurrentSystemTable && currentTable && (
+              {/* Seletor de Sub-abas da Tabela */}
+              <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-lg border border-border">
+                <Button
+                  variant={tableSubTab === 'data' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setTableSubTab('data')}
+                  className="h-6 px-2 text-xs cursor-pointer gap-1"
+                >
+                  <Table className="size-3" />
+                  <span>Dados</span>
+                </Button>
+                {!isCurrentSystemTable && (
                   <Button
-                    variant="ghost"
+                    variant={tableSubTab === 'rls' ? 'default' : 'ghost'}
                     size="sm"
-                    onClick={() => setDroppingTable(currentTable)}
-                    className="text-destructive hover:bg-destructive/10 text-xs h-7 px-2 cursor-pointer gap-1"
-                    title="Excluir esta tabela"
+                    onClick={() => setTableSubTab('rls')}
+                    className="h-6 px-2 text-xs cursor-pointer gap-1"
                   >
-                    <Trash2 className="size-3" />
-                    <span className="hidden sm:inline">Excluir</span>
+                    <Shield className="size-3" />
+                    <span>Políticas & RLS</span>
                   </Button>
                 )}
                 <Button
-                  variant="outline"
+                  variant={tableSubTab === 'api' ? 'default' : 'ghost'}
                   size="sm"
-                  onClick={() => setIsAddOpen(true)}
-                  className="gap-1.5 text-xs h-7 cursor-pointer"
+                  onClick={() => setTableSubTab('api')}
+                  className="h-6 px-2 text-xs cursor-pointer gap-1"
                 >
-                  <Plus className="size-3.5" />
-                  <span>Novo</span>
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-7 cursor-pointer"
-                  onClick={() => refetchRows()}
-                  title={t.common.refresh}
-                >
-                  <RefreshCw className="size-3.5" />
+                  <Code2 className="size-3" />
+                  <span>Integração & API</span>
                 </Button>
               </div>
             </CardHeader>
 
-            <CardContent className="p-0 flex-1 overflow-auto">
-              {loadingRows ? (
-                <div className="p-8 text-center text-xs text-muted-foreground">
-                  {t.common.loading}
+            {/* CONTEÚDO DA ABA: DADOS */}
+            {tableSubTab === 'data' && (
+              <>
+                <div className="p-2 border-b border-border flex items-center justify-between gap-2 bg-muted/20">
+                  <div className="relative">
+                    <Search className="size-3.5 absolute left-2 top-2 text-muted-foreground" />
+                    <input
+                      type="text"
+                      placeholder="Filtrar dados na tabela..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="pl-7 pr-2 py-1 text-xs bg-background border border-border rounded-md text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-primary w-48 sm:w-64"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {!isCurrentSystemTable && currentTable && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setDroppingTable(currentTable)}
+                        className="text-destructive hover:bg-destructive/10 text-xs h-7 px-2 cursor-pointer gap-1"
+                        title="Excluir esta tabela"
+                      >
+                        <Trash2 className="size-3" />
+                        <span className="hidden sm:inline">Excluir Tabela</span>
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setIsAddOpen(true)}
+                      className="gap-1.5 text-xs h-7 cursor-pointer"
+                    >
+                      <Plus className="size-3.5" />
+                      <span>Novo Registro</span>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-7 cursor-pointer"
+                      onClick={() => refetchRows()}
+                      title={t.common.refresh}
+                    >
+                      <RefreshCw className="size-3.5" />
+                    </Button>
+                  </div>
                 </div>
-              ) : rows.length === 0 ? (
-                <div className="p-12 text-center text-xs text-muted-foreground">
-                  {t.database.emptyData}
+
+                <CardContent className="p-0 flex-1 overflow-auto">
+                  {loadingRows ? (
+                    <div className="p-8 text-center text-xs text-muted-foreground">
+                      {t.common.loading}
+                    </div>
+                  ) : filteredRows.length === 0 ? (
+                    <div className="p-12 text-center text-xs text-muted-foreground">
+                      {t.database.emptyData}
+                    </div>
+                  ) : (
+                    <table className="w-full text-xs text-left border-collapse">
+                      <thead className="bg-muted/70 sticky top-0 z-10 border-b border-border">
+                        <tr>
+                          {columns.map((c) => (
+                            <th key={c} className="p-2 font-mono font-medium text-foreground whitespace-nowrap">
+                              {c}
+                            </th>
+                          ))}
+                          <th className="p-2 text-right font-medium text-foreground w-16">
+                            {t.common.actions}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border/60">
+                        {filteredRows.map((row: any, i: number) => {
+                          const rowId = row.id || `row_${i}`;
+                          return (
+                            <tr key={rowId} className="hover:bg-muted/30 transition-colors">
+                              {columns.map((c) => {
+                                const val = row[c];
+                                const displayVal =
+                                  val === null
+                                    ? 'NULL'
+                                    : typeof val === 'object'
+                                      ? JSON.stringify(val)
+                                      : String(val);
+
+                                return (
+                                  <td
+                                    key={c}
+                                    className={`p-2 font-mono truncate max-w-[200px] ${
+                                      val === null ? 'text-muted-foreground italic' : 'text-foreground'
+                                    }`}
+                                    title={displayVal}
+                                  >
+                                    {displayVal}
+                                  </td>
+                                );
+                              })}
+                              <td className="p-2 text-right whitespace-nowrap">
+                                <div className="flex items-center justify-end gap-1">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="size-6 cursor-pointer text-muted-foreground hover:text-foreground"
+                                    onClick={() => handleOpenEdit(row)}
+                                    title="Editar linha"
+                                  >
+                                    <Pencil className="size-3" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="size-6 cursor-pointer text-destructive/80 hover:text-destructive"
+                                    onClick={() => setDeletingId(String(row.id))}
+                                    title={t.common.delete}
+                                  >
+                                    <Trash2 className="size-3" />
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </CardContent>
+              </>
+            )}
+
+            {/* CONTEÚDO DA ABA: POLÍTICAS & RLS (SUPABASE STYLE) */}
+            {tableSubTab === 'rls' && (
+              <CardContent className="p-4 flex-1 overflow-y-auto space-y-6">
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                    <Shield className="size-4 text-emerald-500" />
+                    Políticas de Acesso & RLS (Row-Level Security)
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Defina quem pode ler, inserir, atualizar e deletar dados na tabela "{currentTable}".
+                    Quando a regra é "Dono", o Edgekit garante que os usuários só acessem seus próprios registros.
+                  </p>
                 </div>
-              ) : (
-                <table className="w-full text-left text-xs text-foreground">
-                  <thead className="bg-muted/70 sticky top-0 border-b border-border select-none">
-                    <tr>
-                      {columns.map((col) => (
-                        <th key={col} className="p-2.5 font-mono text-muted-foreground font-semibold">
-                          {col}
-                        </th>
-                      ))}
-                      <th className="p-2.5 w-20 text-right">Ações</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(searchTerm
-                      ? rows.filter((r) =>
-                          Object.values(r).some((val) =>
-                            String(val ?? '').toLowerCase().includes(searchTerm.toLowerCase())
-                          )
-                        )
-                      : rows
-                    ).map((row, idx) => (
-                      <tr key={idx} className="border-b border-border/50 hover:bg-muted/40 transition-colors">
-                        {columns.map((col) => (
-                          <td key={col} className="p-2.5 font-mono text-[11px] truncate max-w-xs">
-                            {typeof row[col] === 'object' && row[col] !== null
-                              ? JSON.stringify(row[col])
-                              : String(row[col] ?? '')}
-                          </td>
-                        ))}
-                        <td className="p-2.5 text-right">
-                          {row.id ? (
-                            <div className="flex items-center justify-end gap-1">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="size-6 text-muted-foreground hover:text-foreground cursor-pointer"
-                                onClick={() => {
-                                  setEditingId(String(row.id));
-                                  setEditRowJson(JSON.stringify(row, null, 2));
-                                  setIsEditOpen(true);
-                                }}
-                                title="Editar Registro"
-                              >
-                                <Pencil className="size-3" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="size-6 text-destructive hover:bg-destructive/10 cursor-pointer"
-                                onClick={() => setDeletingId(String(row.id))}
-                                title={t.common.delete}
-                              >
-                                <Trash2 className="size-3" />
-                              </Button>
-                            </div>
-                          ) : null}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </CardContent>
+
+                {/* Presets de 1 Clique */}
+                <div className="space-y-2">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                    <Sparkles className="size-3.5 text-amber-500" />
+                    Presets Rápidos (Estilo Supabase)
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => applyPreset('public_read_owner_write')}
+                      className="p-2.5 rounded-lg border border-border bg-card hover:bg-muted/60 text-left transition-colors cursor-pointer space-y-1"
+                    >
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                        <Globe className="size-3 text-sky-500" />
+                        <span>Público / Dono</span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        Qualquer visitante lê. Apenas o autor edita e deleta (Posts, Comentários).
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => applyPreset('owner_only')}
+                      className="p-2.5 rounded-lg border border-border bg-card hover:bg-muted/60 text-left transition-colors cursor-pointer space-y-1"
+                    >
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                        <Lock className="size-3 text-emerald-500" />
+                        <span>Totalmente Privado</span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        Apenas o Dono autenticado pode ler e gravar (Tarefas, Notas, Dados Pessoais).
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => applyPreset('admin_only')}
+                      className="p-2.5 rounded-lg border border-border bg-card hover:bg-muted/60 text-left transition-colors cursor-pointer space-y-1"
+                    >
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                        <Shield className="size-3 text-amber-500" />
+                        <span>Apenas Admin</span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        Restrito exclusivamente à chave de serviço ou administradores da plataforma.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => applyPreset('fully_public')}
+                      className="p-2.5 rounded-lg border border-border bg-card hover:bg-muted/60 text-left transition-colors cursor-pointer space-y-1"
+                    >
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                        <Sliders className="size-3 text-purple-500" />
+                        <span>Totalmente Aberto</span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        Leitura e escrita abertas com a chave pública (Catálogos, formulários abertos).
+                      </p>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Configuração Granular por Operação */}
+                <div className="space-y-3 bg-muted/30 p-3.5 rounded-xl border border-border">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-foreground">Controles por Operação CRUD</span>
+                    <label className="flex items-center gap-2 cursor-pointer text-xs">
+                      <input
+                        type="checkbox"
+                        checked={localPolicy.rlsEnabled ?? true}
+                        onChange={(e) => setLocalPolicy({ ...localPolicy, rlsEnabled: e.target.checked })}
+                        className="rounded border-border text-primary focus:ring-primary size-3.5"
+                      />
+                      <span className="font-medium text-foreground">Habilitar RLS nesta tabela</span>
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <label className="block text-[11px] text-muted-foreground mb-1">
+                        SELECT (Leitura de Dados)
+                      </label>
+                      <select
+                        value={localPolicy.selectRule || 'public'}
+                        onChange={(e) => setLocalPolicy({ ...localPolicy, selectRule: e.target.value as any })}
+                        className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-xs font-mono text-foreground cursor-pointer"
+                      >
+                        <option value="public">Público (Qualquer visitante com anonKey)</option>
+                        <option value="authenticated">Usuários Autenticados</option>
+                        <option value="owner">Apenas o Dono (RLS filtrado)</option>
+                        <option value="admin">Apenas Administradores</option>
+                        <option value="disabled">Desabilitado (Bloqueado)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] text-muted-foreground mb-1">
+                        INSERT (Criação de Registros)
+                      </label>
+                      <select
+                        value={localPolicy.insertRule || 'authenticated'}
+                        onChange={(e) => setLocalPolicy({ ...localPolicy, insertRule: e.target.value as any })}
+                        className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-xs font-mono text-foreground cursor-pointer"
+                      >
+                        <option value="authenticated">Usuários Autenticados</option>
+                        <option value="owner">Dono (Atribui userId automaticamente)</option>
+                        <option value="public">Público (Qualquer um pode inserir)</option>
+                        <option value="admin">Apenas Administradores</option>
+                        <option value="disabled">Desabilitado (Bloqueado)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] text-muted-foreground mb-1">
+                        UPDATE (Edição de Registros)
+                      </label>
+                      <select
+                        value={localPolicy.updateRule || 'owner'}
+                        onChange={(e) => setLocalPolicy({ ...localPolicy, updateRule: e.target.value as any })}
+                        className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-xs font-mono text-foreground cursor-pointer"
+                      >
+                        <option value="owner">Apenas o Dono (RLS de segurança)</option>
+                        <option value="authenticated">Qualquer Usuário Autenticado</option>
+                        <option value="admin">Apenas Administradores</option>
+                        <option value="disabled">Desabilitado (Bloqueado)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] text-muted-foreground mb-1">
+                        DELETE (Exclusão de Registros)
+                      </label>
+                      <select
+                        value={localPolicy.deleteRule || 'owner'}
+                        onChange={(e) => setLocalPolicy({ ...localPolicy, deleteRule: e.target.value as any })}
+                        className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-xs font-mono text-foreground cursor-pointer"
+                      >
+                        <option value="owner">Apenas o Dono (RLS de segurança)</option>
+                        <option value="admin">Apenas Administradores</option>
+                        <option value="authenticated">Qualquer Usuário Autenticado</option>
+                        <option value="disabled">Desabilitado (Bloqueado)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Coluna de Dono */}
+                  <div className="pt-2">
+                    <label className="block text-[11px] text-muted-foreground mb-1">
+                      Coluna Identificadora do Dono (Owner Column)
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={localPolicy.ownerColumn || 'user_id'}
+                        onChange={(e) => setLocalPolicy({ ...localPolicy, ownerColumn: e.target.value })}
+                        placeholder="ex: user_id ou author_id"
+                        className="bg-background border border-border rounded-md px-2.5 py-1.5 text-xs font-mono text-foreground w-64"
+                      />
+                      <span className="text-[11px] text-muted-foreground">
+                        Coluna da tabela comparada com o ID do usuário na autenticação.
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button
+                    onClick={handleSavePolicy}
+                    disabled={updatePolicyMutation.isPending}
+                    className="cursor-pointer gap-1.5 text-xs"
+                  >
+                    <Check className="size-3.5" />
+                    <span>{updatePolicyMutation.isPending ? 'Salvando...' : 'Salvar Políticas de RLS'}</span>
+                  </Button>
+                </div>
+              </CardContent>
+            )}
+
+            {/* CONTEÚDO DA ABA: INTEGRAÇÃO & API (ZERO SDK) */}
+            {tableSubTab === 'api' && (
+              <CardContent className="p-4 flex-1 overflow-y-auto space-y-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                    <Code2 className="size-4 text-primary" />
+                    Integre no seu Frontend sem SDK (HTTP & WebSocket)
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Copie e cole estes trechos em React, Next.js, Vue ou qualquer app. Não é necessário instalar nenhuma biblioteca.
+                  </p>
+                </div>
+
+                {/* Seletor de Snippet */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {[
+                    { id: 'get', label: '1. Buscar (GET)' },
+                    { id: 'post', label: '2. Criar (POST)' },
+                    { id: 'patch', label: '3. Atualizar (PATCH)' },
+                    { id: 'delete', label: '4. Deletar (DELETE)' },
+                    { id: 'realtime', label: '5. Realtime (WebSocket)' },
+                    { id: 'auth', label: '6. Auth (Login/Cadastro)' },
+                  ].map((sn) => (
+                    <Button
+                      key={sn.id}
+                      variant={activeApiSnippet === sn.id ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setActiveApiSnippet(sn.id as any)}
+                      className="text-xs h-7 cursor-pointer"
+                    >
+                      {sn.label}
+                    </Button>
+                  ))}
+                </div>
+
+                {/* Bloco de Código com Copiar */}
+                <div className="relative bg-muted/60 border border-border rounded-xl p-3 font-mono text-xs">
+                  <div className="flex items-center justify-between mb-2 pb-2 border-b border-border/60">
+                    <span className="text-[11px] text-muted-foreground">
+                      JavaScript / TypeScript Nativo (fetch API)
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => copyCode(snippets[activeApiSnippet], activeApiSnippet)}
+                      className="h-6 px-2 text-xs gap-1 cursor-pointer"
+                    >
+                      {copiedSnippet === activeApiSnippet ? (
+                        <>
+                          <Check className="size-3 text-emerald-500" />
+                          <span className="text-emerald-500">Copiado</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="size-3" />
+                          <span>Copiar Código</span>
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                  <pre className="text-foreground overflow-x-auto whitespace-pre leading-relaxed text-[11px]">
+                    {snippets[activeApiSnippet]}
+                  </pre>
+                </div>
+              </CardContent>
+            )}
           </Card>
         </div>
       ) : (
-        /* SQL Runner Tab */
+        /* SQL Runner */
         <div className="space-y-4">
           <Card>
-            <CardHeader className="p-4 pb-2 flex flex-row items-center justify-between space-y-0">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                <Terminal className="size-4 text-orange-500" />
-                Console SQL Interativo (D1 Runner)
-              </CardTitle>
+            <CardHeader className="p-3 border-b border-border flex flex-row items-center justify-between space-y-0">
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                <Terminal className="size-3.5" />
+                SQL Query Console
+              </span>
               <Button
                 size="sm"
                 onClick={handleRunSql}
                 disabled={runSqlMutation.isPending}
-                className="gap-1.5 text-xs h-8 cursor-pointer"
+                className="gap-1.5 text-xs h-7 cursor-pointer"
               >
-                <Play className="size-3.5 fill-current" />
-                {runSqlMutation.isPending ? t.common.loading : t.database.runSql}
+                <Play className="size-3.5" />
+                <span>{runSqlMutation.isPending ? t.common.loading : t.database.runSql}</span>
               </Button>
             </CardHeader>
-            <CardContent className="p-4 pt-2 space-y-3">
+            <CardContent className="p-3">
               <textarea
-                rows={5}
+                rows={4}
                 value={sqlQuery}
                 onChange={(e) => setSqlQuery(e.target.value)}
-                placeholder="Escreva sua query SQL aqui (ex: SELECT * FROM users;)"
-                className="w-full bg-muted/60 border border-border rounded-lg p-3 text-xs font-mono text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
+                placeholder="Ex: SELECT * FROM users LIMIT 10;"
+                className="w-full bg-muted/50 border border-border rounded-lg p-3 text-xs font-mono text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
               />
-              {sqlError && (
-                <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-lg text-xs text-destructive font-mono">
-                  {sqlError}
-                </div>
-              )}
             </CardContent>
           </Card>
+
+          {sqlError && (
+            <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-lg text-xs text-destructive font-mono">
+              {sqlError}
+            </div>
+          )}
 
           {sqlResults && (
             <Card>
               <CardHeader className="p-3 border-b border-border">
-                <CardTitle className="text-xs font-semibold text-muted-foreground">
-                  Resultado: {sqlResults.rowCount ?? 0} {t.database.rowsCount}
+                <CardTitle className="text-xs font-mono">
+                  {sqlResults.rowCount ?? 0} {t.database.rowsCount}
                 </CardTitle>
               </CardHeader>
-              <CardContent className="p-0 overflow-x-auto max-h-96">
+              <CardContent className="p-0 overflow-auto max-h-[350px]">
                 {sqlResults.rows && sqlResults.rows.length > 0 ? (
-                  <table className="w-full text-left text-xs text-foreground">
+                  <table className="w-full text-xs text-left border-collapse font-mono">
                     <thead className="bg-muted/70 sticky top-0 border-b border-border">
                       <tr>
-                        {Object.keys(sqlResults.rows[0]).map((k) => (
-                          <th key={k} className="p-2 font-mono text-muted-foreground font-semibold">
-                            {k}
+                        {Object.keys(sqlResults.rows[0]).map((col) => (
+                          <th key={col} className="p-2 font-medium text-foreground">
+                            {col}
                           </th>
                         ))}
                       </tr>
                     </thead>
-                    <tbody>
-                      {sqlResults.rows.map((r: any, i: number) => (
-                        <tr key={i} className="border-b border-border/50 hover:bg-muted/30">
-                          {Object.values(r).map((v: any, j: number) => (
-                            <td key={j} className="p-2 font-mono text-[11px] truncate max-w-xs">
-                              {String(v ?? '')}
+                    <tbody className="divide-y divide-border/60">
+                      {sqlResults.rows.map((row: any, i: number) => (
+                        <tr key={i} className="hover:bg-muted/30">
+                          {Object.values(row).map((v: any, j: number) => (
+                            <td key={j} className="p-2 text-foreground truncate max-w-[200px]">
+                              {v === null ? 'NULL' : typeof v === 'object' ? JSON.stringify(v) : String(v)}
                             </td>
                           ))}
                         </tr>
@@ -582,9 +1073,9 @@ export const DatabasePage: React.FC = () => {
                     </tbody>
                   </table>
                 ) : (
-                  <pre className="p-4 text-xs font-mono text-emerald-500 bg-muted/40">
-                    {JSON.stringify(sqlResults, null, 2)}
-                  </pre>
+                  <div className="p-4 text-xs text-muted-foreground text-center">
+                    Consulta executada sem retorno de linhas.
+                  </div>
                 )}
               </CardContent>
             </Card>
@@ -592,110 +1083,90 @@ export const DatabasePage: React.FC = () => {
         </div>
       )}
 
-      {/* Modal: Criar Nova Tabela no D1 */}
+      {/* Modal de Criação de Tabela */}
       <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-        <DialogContent className="sm:max-w-[540px]">
-          <form onSubmit={handleCreateNewTable}>
-            <DialogHeader>
-              <DialogTitle className="text-base flex items-center gap-2">
-                <Plus className="size-4 text-orange-500" />
-                Criar Nova Tabela no Cloudflare D1
-              </DialogTitle>
-              <DialogDescription className="text-xs">
-                Defina o nome da tabela e a estrutura das colunas. A tabela será criada instantaneamente no seu banco serverless.
-              </DialogDescription>
-            </DialogHeader>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle className="text-base">Nova Tabela no Cloudflare D1</DialogTitle>
+            <DialogDescription className="text-xs">
+              Defina o nome da tabela e suas colunas iniciais. A chave primária "id" será criada automaticamente se não informada.
+            </DialogDescription>
+          </DialogHeader>
 
-            <div className="py-4 space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">
-                  Nome da Tabela
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="ex: produtos, pedidos, logs"
-                  value={newTableName}
-                  onChange={(e) => setNewTableName(e.target.value)}
-                  className="w-full px-3 py-2 bg-muted/50 border border-border rounded-lg text-xs font-mono text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
-                />
+          <form onSubmit={handleCreateTable} className="space-y-4 py-2">
+            <div>
+              <label className="text-xs font-medium text-foreground block mb-1">
+                Nome da Tabela
+              </label>
+              <input
+                type="text"
+                placeholder="ex: posts, clientes, pedidos"
+                value={newTableName}
+                onChange={(e) => setNewTableName(e.target.value)}
+                className="w-full bg-background border border-border rounded-md px-3 py-1.5 text-xs text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary font-mono"
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-foreground">Colunas</label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleAddColumnDef}
+                  className="h-6 text-[11px] px-2 gap-1"
+                >
+                  <Plus className="size-3" />
+                  <span>Adicionar Coluna</span>
+                </Button>
               </div>
 
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-medium text-foreground">Colunas da Tabela</span>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleAddColumnDef}
-                    className="h-6 px-2 text-[11px] gap-1 cursor-pointer"
-                  >
-                    <Plus className="size-3" />
-                    <span>Adicionar Coluna</span>
-                  </Button>
-                </div>
-
-                <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                  {newTableColumns.map((col, idx) => (
-                    <div key={idx} className="flex items-center gap-2 bg-muted/40 p-2 rounded-lg border border-border/60">
+              <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
+                {newTableColumns.map((col, idx) => (
+                  <div key={idx} className="flex items-center gap-2 bg-muted/40 p-2 rounded-md border border-border">
+                    <input
+                      type="text"
+                      placeholder="Nome"
+                      value={col.name}
+                      onChange={(e) => handleColumnChange(idx, 'name', e.target.value)}
+                      className="bg-background border border-border rounded px-2 py-1 text-xs text-foreground flex-1 font-mono"
+                      required
+                    />
+                    <select
+                      value={col.type}
+                      onChange={(e) => handleColumnChange(idx, 'type', e.target.value)}
+                      className="bg-background border border-border rounded px-2 py-1 text-xs text-foreground font-mono"
+                    >
+                      <option value="TEXT">TEXT</option>
+                      <option value="INTEGER">INTEGER</option>
+                      <option value="REAL">REAL</option>
+                      <option value="BLOB">BLOB</option>
+                      <option value="JSON">JSON</option>
+                    </select>
+                    <label className="flex items-center gap-1 text-[10px] text-muted-foreground cursor-pointer">
                       <input
-                        type="text"
-                        required
-                        placeholder="Nome da coluna"
-                        value={col.name}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setNewTableColumns((prev) =>
-                            prev.map((c, i) => (i === idx ? { ...c, name: val } : c))
-                          );
-                        }}
-                        className="flex-1 px-2.5 py-1 bg-background border border-border rounded text-xs font-mono text-foreground"
+                        type="checkbox"
+                        checked={col.primaryKey}
+                        onChange={(e) => handleColumnChange(idx, 'primaryKey', e.target.checked)}
+                        className="rounded border-border text-primary size-3"
                       />
-
-                      <select
-                        value={col.type}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setNewTableColumns((prev) =>
-                            prev.map((c, i) => (i === idx ? { ...c, type: val } : c))
-                          );
-                        }}
-                        className="w-24 px-2 py-1 bg-background border border-border rounded text-xs font-mono text-foreground"
+                      <span>PK</span>
+                    </label>
+                    {newTableColumns.length > 1 && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleRemoveColumnDef(idx)}
+                        className="size-6 text-destructive/80 hover:text-destructive"
                       >
-                        <option value="TEXT">TEXT</option>
-                        <option value="INTEGER">INTEGER</option>
-                        <option value="REAL">REAL</option>
-                        <option value="BLOB">BLOB</option>
-                        <option value="JSON">JSON</option>
-                      </select>
-
-                      <label className="flex items-center gap-1 text-[11px] text-muted-foreground cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={col.primaryKey}
-                          onChange={(e) => {
-                            const val = e.target.checked;
-                            setNewTableColumns((prev) =>
-                              prev.map((c, i) => (i === idx ? { ...c, primaryKey: val } : c))
-                            );
-                          }}
-                        />
-                        <span>PK</span>
-                      </label>
-
-                      {newTableColumns.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveColumnDef(idx)}
-                          className="text-muted-foreground hover:text-destructive p-1 rounded cursor-pointer"
-                        >
-                          <X className="size-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                        <Trash2 className="size-3" />
+                      </Button>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
 

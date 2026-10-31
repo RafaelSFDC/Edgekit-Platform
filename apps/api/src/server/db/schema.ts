@@ -11,6 +11,9 @@ export const users = sqliteTable('users', {
   emailVerified: integer('email_verified', { mode: 'boolean' }).notNull().default(false),
   image: text('image'),
   role: text('role').notNull().default('user'), // 'admin' | 'user'
+  banned: integer('banned', { mode: 'boolean' }).default(false),
+  banReason: text('ban_reason'),
+  banExpires: integer('ban_expires', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })
@@ -26,6 +29,7 @@ export const sessions = sqliteTable('sessions', {
   userId: text('user_id')
     .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
+  impersonatedBy: text('impersonated_by'),
 })
 
 export const accounts = sqliteTable('accounts', {
@@ -126,14 +130,20 @@ export const webhooks = sqliteTable('webhooks', {
 })
 
 // =========================================================================
-// 6. TABLE ACCESS POLICIES (Mini-RLS)
+// 6. TABLE ACCESS POLICIES (Supabase-Style RLS Engine)
 // =========================================================================
 
 export const tablePolicies = sqliteTable('table_policies', {
   id: text('id').primaryKey(),
   tableName: text('table_name').notNull().unique(),
-  readLevel: text('read_level').notNull().default('public'), // 'public' | 'authenticated' | 'admin'
-  writeLevel: text('write_level').notNull().default('authenticated'), // 'public' | 'authenticated' | 'admin'
+  rlsEnabled: integer('rls_enabled', { mode: 'boolean' }).notNull().default(true),
+  selectRule: text('select_rule').notNull().default('public'), // 'public' | 'authenticated' | 'owner' | 'admin' | 'disabled'
+  insertRule: text('insert_rule').notNull().default('authenticated'), // 'public' | 'authenticated' | 'owner' | 'admin' | 'disabled'
+  updateRule: text('update_rule').notNull().default('owner'), // 'authenticated' | 'owner' | 'admin' | 'disabled'
+  deleteRule: text('delete_rule').notNull().default('owner'), // 'authenticated' | 'owner' | 'admin' | 'disabled'
+  ownerColumn: text('owner_column').notNull().default('user_id'),
+  readLevel: text('read_level').notNull().default('public'), // Retrocompatibilidade
+  writeLevel: text('write_level').notNull().default('authenticated'), // Retrocompatibilidade
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })

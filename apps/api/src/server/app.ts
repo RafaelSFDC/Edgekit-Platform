@@ -3,6 +3,7 @@ import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import { secureHeaders } from 'hono/secure-headers'
 import type { AppEnv } from './types'
+import { checkIpAccess, resolveCorsOrigin } from './auth/security'
 import { authContextMiddleware } from './auth/middleware'
 import { authRoutes } from './routes/auth.routes'
 import { dbRoutes } from './routes/db.routes'
@@ -19,15 +20,28 @@ app.use('*', secureHeaders())
 app.use(
   '*',
   cors({
-    origin: (origin) => origin || '*',
-    allowHeaders: ['Content-Type', 'Authorization', 'apikey', 'x-api-key', 'X-Requested-With'],
+    origin: async (origin, c) => (await resolveCorsOrigin(origin, c)) || '',
+    allowHeaders: ['Content-Type', 'Authorization', 'apikey', 'x-api-key', 'X-Requested-With', 'x-app-secret'],
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    exposeHeaders: ['Content-Length', 'X-Edgekit-Version', 'X-HonoBase-Version'],
+    exposeHeaders: ['Content-Length', 'X-Edgekit-Version', 'X-HonoBase-Version', 'set-auth-token'],
     credentials: true,
   }),
 )
 
-// 2. Middleware de Contexto de Autenticação para a API
+// 2. Proteção de Acesso por IP & Contexto de Autenticação para a API
+app.use('/api/*', async (c, next) => {
+  const ipCheck = await checkIpAccess(c)
+  if (!ipCheck.allowed) {
+    return c.json(
+      {
+        success: false,
+        error: { code: 'FORBIDDEN_IP', message: ipCheck.reason || 'Acesso bloqueado por restrição de IP.' },
+      },
+      403,
+    )
+  }
+  await next()
+})
 app.use('/api/*', authContextMiddleware())
 
 // 3. Health Checks

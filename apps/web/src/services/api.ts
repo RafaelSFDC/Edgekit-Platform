@@ -5,6 +5,8 @@ import type {
   StorageFile,
   SetupStatusResponse,
   PlatformKeys,
+  TablePolicy,
+  SecuritySettings,
 } from '../types';
 
 export class ApiError extends Error {
@@ -365,7 +367,7 @@ export async function broadcastRealtime(
 
 export async function fetchTablePolicy(
   table: string
-): Promise<{ tableName: string; readLevel: string; writeLevel: string }> {
+): Promise<TablePolicy> {
   const res = await fetch(`${API_BASE}/api/v1/admin/tables/${encodeURIComponent(table)}/policy`, {
     headers: getHeaders(),
   });
@@ -374,12 +376,22 @@ export async function fetchTablePolicy(
     throw new ApiError('Falha ao obter política da tabela.', res.status);
   }
   const json = await res.json();
-  return json.data || { tableName: table, readLevel: 'public', writeLevel: 'authenticated' };
+  return (
+    json.data || {
+      tableName: table,
+      rlsEnabled: true,
+      selectRule: 'public',
+      insertRule: 'authenticated',
+      updateRule: 'owner',
+      deleteRule: 'owner',
+      ownerColumn: 'user_id',
+    }
+  );
 }
 
 export async function updateTablePolicy(
   table: string,
-  policy: { readLevel: string; writeLevel: string }
+  policy: Partial<TablePolicy>
 ): Promise<any> {
   const res = await fetch(`${API_BASE}/api/v1/admin/tables/${encodeURIComponent(table)}/policy`, {
     method: 'PUT',
@@ -390,6 +402,34 @@ export async function updateTablePolicy(
   const json = await res.json();
   if (!res.ok || !json.success) {
     throw new ApiError(json.error?.message || 'Falha ao atualizar política da tabela.', res.status);
+  }
+  return json.data;
+}
+
+export async function fetchSecuritySettings(): Promise<SecuritySettings> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/settings/security`, {
+    headers: getHeaders(),
+  });
+
+  if (!res.ok) {
+    throw new ApiError('Falha ao obter configurações de segurança.', res.status);
+  }
+  const json = await res.json();
+  return json.data || { allowedOrigins: [], allowedIps: [], blockExternalLocalhost: true };
+}
+
+export async function updateSecuritySettings(
+  settings: Partial<SecuritySettings>
+): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/settings/security`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify(settings),
+  });
+
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new ApiError(json.error?.message || 'Falha ao salvar configurações de segurança.', res.status);
   }
   return json.data;
 }

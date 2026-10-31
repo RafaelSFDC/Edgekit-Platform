@@ -59,6 +59,24 @@ export interface PlatformKeys {
   jwtSecretConfigured?: boolean;
 }
 
+export interface TablePolicy {
+  tableName: string;
+  rlsEnabled?: boolean;
+  selectRule?: 'public' | 'authenticated' | 'owner' | 'admin' | 'disabled';
+  insertRule?: 'public' | 'authenticated' | 'owner' | 'admin' | 'disabled';
+  updateRule?: 'public' | 'authenticated' | 'owner' | 'admin' | 'disabled';
+  deleteRule?: 'public' | 'authenticated' | 'owner' | 'admin' | 'disabled';
+  ownerColumn?: string;
+  readLevel?: string;
+  writeLevel?: string;
+}
+
+export interface SecuritySettings {
+  allowedOrigins: string[];
+  allowedIps: string[];
+  blockExternalLocalhost: boolean;
+}
+
 export interface RealtimeMessage {
   id: string;
   channel: string;

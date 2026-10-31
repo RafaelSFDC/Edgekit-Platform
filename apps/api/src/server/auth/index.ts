@@ -1,5 +1,6 @@
 import { betterAuth } from 'better-auth'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
+import { bearer, admin } from 'better-auth/plugins'
 import { getDatabaseRuntime, schema } from '../db'
 import { getBindings } from '../env'
 import { ensureDefaultKeys } from './keys'
@@ -32,6 +33,10 @@ export async function getAuth() {
         verification: schema.verifications,
       },
     }),
+    plugins: [
+      bearer(),
+      admin(),
+    ],
     session: {
       cookieCache: {
         enabled: true,

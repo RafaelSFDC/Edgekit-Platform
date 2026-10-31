@@ -131,4 +131,89 @@ describe('HonoBase Core & Cloudflare Compatibility', () => {
     const setCookieHeader = res.headers.get('set-cookie')
     expect(setCookieHeader).toContain('edgekit_platform_session')
   })
+
+  it('Supabase-Style RLS: Tabela com regra de Dono restringe operações e admin tem bypass', async () => {
+    const bindings = await getBindings()
+    const serviceRoleKey =
+      bindings.EDGEKIT_SERVICE_ROLE_KEY || bindings.HONOBASE_SERVICE_ROLE_KEY || 'hb_service_default'
+    const anonKey = bindings.EDGEKIT_ANON_KEY || 'hb_anon_default'
+
+    // 1. Cria tabela 'tasks' via admin API
+    const createRes = await app.request('/api/v1/admin/tables', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': serviceRoleKey,
+      },
+      body: JSON.stringify({
+        name: 'tasks',
+        columns: [
+          { name: 'id', type: 'TEXT', primaryKey: true },
+          { name: 'title', type: 'TEXT' },
+          { name: 'user_id', type: 'TEXT' },
+        ],
+      }),
+    })
+    expect([201, 500]).toContain(createRes.status)
+
+    // 2. Configura RLS restrito ao Dono para select e write
+    const policyRes = await app.request('/api/v1/admin/tables/tasks/policy', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': serviceRoleKey,
+      },
+      body: JSON.stringify({
+        rlsEnabled: true,
+        selectRule: 'owner',
+        insertRule: 'authenticated',
+        updateRule: 'owner',
+        deleteRule: 'owner',
+        ownerColumn: 'user_id',
+      }),
+    })
+    expect(policyRes.status).toBe(200)
+
+    // 3. Consulta com chave anon deve ser bloqueada (401/403) pois a regra exige Dono
+    const anonGet = await app.request('/api/v1/db/tasks', {
+      headers: { 'apikey': anonKey },
+    })
+    expect([401, 403]).toContain(anonGet.status)
+
+    // 4. Consulta com service_role (Admin) tem bypass total e retorna 200
+    const adminGet = await app.request('/api/v1/db/tasks', {
+      headers: { 'apikey': serviceRoleKey },
+    })
+    expect(adminGet.status).toBe(200)
+    const adminJson: any = await adminGet.json()
+    expect(adminJson.success).toBe(true)
+  })
+
+  it('Configurações de Segurança: Pode ler e atualizar origens CORS e Whitelist de IPs', async () => {
+    const bindings = await getBindings()
+    const serviceRoleKey =
+      bindings.EDGEKIT_SERVICE_ROLE_KEY || bindings.HONOBASE_SERVICE_ROLE_KEY || 'hb_service_default'
+
+    const putRes = await app.request('/api/v1/admin/settings/security', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': serviceRoleKey,
+      },
+      body: JSON.stringify({
+        allowedOrigins: ['https://meuapp.com', 'https://outroapp.com'],
+        allowedIps: ['127.0.0.1'],
+        blockExternalLocalhost: true,
+      }),
+    })
+    expect(putRes.status).toBe(200)
+
+    const getRes = await app.request('/api/v1/admin/settings/security', {
+      headers: { 'apikey': serviceRoleKey },
+    })
+    expect(getRes.status).toBe(200)
+    const json: any = await getRes.json()
+    expect(json.data.allowedOrigins).toContain('https://meuapp.com')
+    expect(json.data.blockExternalLocalhost).toBe(true)
+  })
 })

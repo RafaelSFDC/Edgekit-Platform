@@ -33,7 +33,7 @@ export type DatabaseRuntime =
       path: string
     }
 
-async function applyDevD1Migrations(db: AppDatabase) {
+async function applyD1Migrations(db: AppDatabase) {
   try {
     await db.run(
       sql`CREATE TABLE IF NOT EXISTS __honobase_migrations (tag text PRIMARY KEY)`,
@@ -47,7 +47,7 @@ async function applyDevD1Migrations(db: AppDatabase) {
         continue
       }
 
-      console.info(`[DevD1] Executing migration: ${migration.tag}`)
+      console.info(`[D1 Bootstrap] Executando migração: ${migration.tag}`)
 
       for (const statement of migration.sql.split('--> statement-breakpoint')) {
         const trimmed = statement.trim()
@@ -62,7 +62,7 @@ async function applyDevD1Migrations(db: AppDatabase) {
             if (msg.includes('already exists') || msg.includes('duplicate column')) {
               continue
             }
-            console.error(`[DevD1] Migration error in ${migration.tag}:`, msg)
+            console.error(`[D1 Bootstrap] Erro na migração ${migration.tag}:`, msg)
             throw stmtError
           }
         }
@@ -71,34 +71,34 @@ async function applyDevD1Migrations(db: AppDatabase) {
       await db.run(
         sql`INSERT INTO __honobase_migrations (tag) VALUES (${migration.tag})`,
       )
-      console.info(`[DevD1] Applied migration: ${migration.tag}`)
+      console.info(`[D1 Bootstrap] Migração aplicada com sucesso: ${migration.tag}`)
     }
   } catch (err) {
-    console.warn('[DevD1] Error during migration check (may already be initialized):', err)
+    console.warn('[D1 Bootstrap] Aviso durante verificação de migrações:', err)
   }
 }
 
-let d1DevState: 'idle' | 'bootstrapping' | 'ready' = 'idle'
+let d1ReadyState: 'idle' | 'bootstrapping' | 'ready' = 'idle'
 let bootstrapPromise: Promise<void> | null = null
 
-function ensureDevD1Ready(db: AppDatabase): Promise<void> {
-  if (d1DevState === 'ready') {
+function ensureD1Ready(db: AppDatabase): Promise<void> {
+  if (d1ReadyState === 'ready') {
     return Promise.resolve()
   }
 
-  if (d1DevState === 'bootstrapping' && bootstrapPromise) {
+  if (d1ReadyState === 'bootstrapping' && bootstrapPromise) {
     return bootstrapPromise
   }
 
-  d1DevState = 'bootstrapping'
+  d1ReadyState = 'bootstrapping'
 
-  bootstrapPromise = applyDevD1Migrations(db)
+  bootstrapPromise = applyD1Migrations(db)
     .then(() => {
-      d1DevState = 'ready'
+      d1ReadyState = 'ready'
     })
     .catch((error) => {
-      console.error('[DevD1] Bootstrap error:', error)
-      d1DevState = 'idle'
+      console.error('[D1 Bootstrap] Falha crítica no bootstrap:', error)
+      d1ReadyState = 'idle'
       bootstrapPromise = null
     })
 
@@ -116,9 +116,9 @@ export async function getDatabaseRuntime(): Promise<DatabaseRuntime> {
 
     const db = d1DbInstance
 
-    if (bindings.ENVIRONMENT !== 'production') {
-      await ensureDevD1Ready(db)
-    }
+    // Auto-bootstrap universal: garante que tanto em Dev quanto em Produção (D1)
+    // as tabelas do sistema existam mesmo em novos deploys.
+    await ensureD1Ready(db)
 
     return {
       kind: 'd1',

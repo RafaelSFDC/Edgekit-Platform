@@ -35,12 +35,21 @@ function sanitizeIdentifier(name: string): string {
   return name
 }
 
-async function checkTableAccess(
+export interface TableAccessResult {
+  allowed: boolean
+  isAdmin?: boolean
+  isOwnerRule?: boolean
+  ownerColumn?: string
+  ownerId?: string
+}
+
+async function resolveTableAccess(
   db: AppDatabase,
   table: string,
+  user: any,
   role?: string,
-  action: 'read' | 'write' = 'read',
-): Promise<void> {
+  action: 'select' | 'insert' | 'update' | 'delete' = 'select',
+): Promise<TableAccessResult> {
   sanitizeIdentifier(table)
 
   if (SYSTEM_TABLES.has(table.toLowerCase())) {
@@ -49,47 +58,88 @@ async function checkTableAccess(
         `Acesso negado: a tabela "${table}" pertence à infraestrutura da plataforma e só pode ser acessada por administradores.`,
       )
     }
-    return
+    return { allowed: true, isAdmin: true }
   }
 
-  // Se for admin (service_role ou usuário admin), tem acesso irrestrito
+  // Administrador tem bypass completo de RLS (estilo Supabase Service Role)
   if (role === 'admin') {
-    return
+    return { allowed: true, isAdmin: true }
   }
 
-  // Verifica política de acesso configurada
+  let policy: any = null
   try {
-    const policy = await db
+    policy = await db
       .select()
       .from(tablePolicies)
       .where(eq(tablePolicies.tableName, table))
       .get()
+  } catch {
+    policy = null
+  }
 
-    const requiredLevel =
-      action === 'read' ? policy?.readLevel || 'public' : policy?.writeLevel || 'authenticated'
+  // Presets recomendados se não houver política explícita
+  const rlsEnabled = policy ? Boolean(policy.rlsEnabled) : true
+  const ownerColumn = policy?.ownerColumn || 'user_id'
 
-    if (requiredLevel === 'admin' && role !== 'admin') {
+  let rule: string
+  if (policy) {
+    if (action === 'select') rule = policy.selectRule || policy.readLevel || 'public'
+    else if (action === 'insert') rule = policy.insertRule || policy.writeLevel || 'authenticated'
+    else if (action === 'update') rule = policy.updateRule || policy.writeLevel || 'owner'
+    else rule = policy.deleteRule || policy.writeLevel || 'owner'
+  } else {
+    if (action === 'select') rule = 'public'
+    else if (action === 'insert') rule = 'authenticated'
+    else if (action === 'update') rule = 'owner'
+    else rule = 'owner'
+  }
+
+  if (!rlsEnabled) {
+    // RLS desabilitado: leitura pública, gravação requer usuário autenticado
+    if (action !== 'select' && (!user && (!role || role === 'anon'))) {
+      throw new Error(`Autenticação necessária para ${action} na tabela "${table}".`)
+    }
+    return { allowed: true }
+  }
+
+  if (rule === 'disabled') {
+    throw new Error(`Acesso negado: operações de ${action} estão desabilitadas na tabela "${table}".`)
+  }
+
+  if (rule === 'admin') {
+    if (role !== 'admin') {
       throw new Error(
-        `Acesso negado: a tabela "${table}" exige privilégios de administrador para ${action === 'read' ? 'leitura' : 'escrita'}.`,
+        `Acesso negado: a tabela "${table}" exige privilégios de administrador para ${action}.`,
       )
     }
+    return { allowed: true, isAdmin: true }
+  }
 
-    if (requiredLevel === 'authenticated' && (!role || role === 'anon')) {
+  if (rule === 'authenticated') {
+    if (!user && (!role || role === 'anon')) {
       throw new Error(
-        `Acesso restrito: autenticação necessária para ${action === 'read' ? 'leitura' : 'escrita'} na tabela "${table}".`,
+        `Acesso restrito: autenticação necessária para ${action} na tabela "${table}".`,
       )
     }
-  } catch (err: any) {
-    if (err.message?.startsWith('Acesso')) {
-      throw err
-    }
-    // Caso a tabela de políticas ainda não esteja inicializada, segue política padrão segura
-    if (action === 'write' && (!role || role === 'anon')) {
+    return { allowed: true, ownerColumn, ownerId: user?.id }
+  }
+
+  if (rule === 'owner') {
+    if (!user?.id) {
       throw new Error(
-        `Acesso restrito: autenticação necessária para gravação na tabela "${table}".`,
+        `Acesso restrito: autenticação de usuário necessária para acessar seus próprios registros na tabela "${table}".`,
       )
+    }
+    return {
+      allowed: true,
+      isOwnerRule: true,
+      ownerColumn,
+      ownerId: user.id,
     }
   }
+
+  // rule === 'public'
+  return { allowed: true, ownerColumn, ownerId: user?.id }
 }
 
 async function computeHmacSha256(secret: string, message: string): Promise<string> {
@@ -218,23 +268,26 @@ async function broadcastDatabaseEvent(
   }
 }
 
-// REST Data API: Consulta dinâmica com filtros estilo Supabase
+// REST Data API: Consulta dinâmica com filtros estilo Supabase e RLS nativo
 dbRoutes.get('/:table', async (c) => {
   const table = c.req.param('table')
   const role = c.get('role')
+  const user: any = c.get('user')
 
   const runtime = await getDatabaseRuntime()
   const db = runtime.db
 
+  let access: TableAccessResult
   try {
-    await checkTableAccess(db, table, role, 'read')
+    access = await resolveTableAccess(db, table, user, role, 'select')
   } catch (err: any) {
+    const isForbidden = err.message?.includes('Acesso negado') || err.message?.includes('Acesso restrito')
     return c.json(
       {
         success: false,
-        error: { message: err.message, code: 'FORBIDDEN_TABLE' },
+        error: { message: err.message, code: isForbidden ? 'FORBIDDEN_TABLE' : 'UNAUTHORIZED' },
       },
-      403,
+      isForbidden ? 403 : 401,
     )
   }
 
@@ -254,6 +307,12 @@ dbRoutes.get('/:table', async (c) => {
   }
 
   const whereConditions: any[] = []
+
+  // Injeta cláusula de RLS se a regra for restrita ao dono
+  if (access.isOwnerRule && access.ownerColumn && access.ownerId) {
+    whereConditions.push(sql`${sql.raw(`\`${access.ownerColumn}\``)} = ${access.ownerId}`)
+  }
+
   const reservedParams = new Set(['select', 'limit', 'offset', 'order', 'apikey'])
 
   for (const [key, value] of Object.entries(query)) {
@@ -344,12 +403,19 @@ dbRoutes.get('/:table/:id', async (c) => {
   const table = c.req.param('table')
   const id = c.req.param('id')
   const role = c.get('role')
+  const user: any = c.get('user')
 
   try {
     const runtime = await getDatabaseRuntime()
-    await checkTableAccess(runtime.db, table, role, 'read')
+    const access = await resolveTableAccess(runtime.db, table, user, role, 'select')
 
-    const query = sql`SELECT * FROM ${sql.raw(`\`${table}\``)} WHERE \`id\` = ${id} LIMIT 1`
+    let query: any
+    if (access.isOwnerRule && access.ownerColumn && access.ownerId) {
+      query = sql`SELECT * FROM ${sql.raw(`\`${table}\``)} WHERE \`id\` = ${id} AND ${sql.raw(`\`${access.ownerColumn}\``)} = ${access.ownerId} LIMIT 1`
+    } else {
+      query = sql`SELECT * FROM ${sql.raw(`\`${table}\``)} WHERE \`id\` = ${id} LIMIT 1`
+    }
+
     const rows: any[] = await runtime.db.all(query)
 
     if (!rows || rows.length === 0) {
@@ -373,14 +439,15 @@ dbRoutes.get('/:table/:id', async (c) => {
   }
 })
 
-// Inserir registro(s) com CDC Broadcast
-dbRoutes.post('/:table', requireAuth(), async (c) => {
+// Inserir registro(s) com CDC Broadcast e RLS
+dbRoutes.post('/:table', async (c) => {
   const table = c.req.param('table')
   const role = c.get('role')
+  const user: any = c.get('user')
 
   try {
     const runtime = await getDatabaseRuntime()
-    await checkTableAccess(runtime.db, table, role, 'write')
+    const access = await resolveTableAccess(runtime.db, table, user, role, 'insert')
 
     const body = await c.req.json()
     const records = Array.isArray(body) ? body : [body]
@@ -392,6 +459,13 @@ dbRoutes.post('/:table', requireAuth(), async (c) => {
     const results = []
 
     for (const record of records) {
+      // Injeta coluna de dono se RLS de dono ou usuário autenticado
+      if (access.isOwnerRule && access.ownerColumn && access.ownerId) {
+        record[access.ownerColumn] = access.ownerId
+      } else if (user?.id && !access.isAdmin && !record[access.ownerColumn || 'user_id']) {
+        record[access.ownerColumn || 'user_id'] = user.id
+      }
+
       const keys = Object.keys(record)
       for (const k of keys) {
         sanitizeIdentifier(k)
@@ -429,15 +503,16 @@ dbRoutes.post('/:table', requireAuth(), async (c) => {
   }
 })
 
-// Atualizar registro por ID com CDC Broadcast
-dbRoutes.patch('/:table/:id', requireAuth(), async (c) => {
+// Atualizar registro por ID com CDC Broadcast e RLS
+dbRoutes.patch('/:table/:id', async (c) => {
   const table = c.req.param('table')
   const id = c.req.param('id')
   const role = c.get('role')
+  const user: any = c.get('user')
 
   try {
     const runtime = await getDatabaseRuntime()
-    await checkTableAccess(runtime.db, table, role, 'write')
+    const access = await resolveTableAccess(runtime.db, table, user, role, 'update')
 
     const body = await c.req.json()
     const keys = Object.keys(body)
@@ -455,11 +530,26 @@ dbRoutes.patch('/:table/:id', requireAuth(), async (c) => {
       sql.raw(', '),
     )
 
-    const updateQuery = sql`UPDATE ${sql.raw(`\`${table}\``)} SET ${setClauses} WHERE \`id\` = ${id} RETURNING *`
+    let updateQuery: any
+    if (access.isOwnerRule && access.ownerColumn && access.ownerId) {
+      updateQuery = sql`UPDATE ${sql.raw(`\`${table}\``)} SET ${setClauses} WHERE \`id\` = ${id} AND ${sql.raw(`\`${access.ownerColumn}\``)} = ${access.ownerId} RETURNING *`
+    } else {
+      updateQuery = sql`UPDATE ${sql.raw(`\`${table}\``)} SET ${setClauses} WHERE \`id\` = ${id} RETURNING *`
+    }
+
     const updated: any[] = await runtime.db.all(updateQuery)
 
     if (!updated || updated.length === 0) {
-      return c.json({ success: false, error: { message: 'Registro não encontrado.' } }, 404)
+      return c.json(
+        {
+          success: false,
+          error: {
+            message: 'Registro não encontrado ou você não possui permissão para atualizá-lo.',
+            code: 'NOT_FOUND_OR_FORBIDDEN',
+          },
+        },
+        404,
+      )
     }
 
     const updatedRecord = updated[0]
@@ -478,17 +568,24 @@ dbRoutes.patch('/:table/:id', requireAuth(), async (c) => {
   }
 })
 
-// Deletar registro por ID com CDC Broadcast
-dbRoutes.delete('/:table/:id', requireAuth(), async (c) => {
+// Deletar registro por ID com CDC Broadcast e RLS
+dbRoutes.delete('/:table/:id', async (c) => {
   const table = c.req.param('table')
   const id = c.req.param('id')
   const role = c.get('role')
+  const user: any = c.get('user')
 
   try {
     const runtime = await getDatabaseRuntime()
-    await checkTableAccess(runtime.db, table, role, 'write')
+    const access = await resolveTableAccess(runtime.db, table, user, role, 'delete')
 
-    const deleteQuery = sql`DELETE FROM ${sql.raw(`\`${table}\``)} WHERE \`id\` = ${id}`
+    let deleteQuery: any
+    if (access.isOwnerRule && access.ownerColumn && access.ownerId) {
+      deleteQuery = sql`DELETE FROM ${sql.raw(`\`${table}\``)} WHERE \`id\` = ${id} AND ${sql.raw(`\`${access.ownerColumn}\``)} = ${access.ownerId}`
+    } else {
+      deleteQuery = sql`DELETE FROM ${sql.raw(`\`${table}\``)} WHERE \`id\` = ${id}`
+    }
+
     await runtime.db.run(deleteQuery)
 
     // Emissão CDC para o registro deletado

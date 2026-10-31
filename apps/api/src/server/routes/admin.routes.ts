@@ -3,11 +3,12 @@ import { count, eq, sql } from 'drizzle-orm'
 import { nanoid } from 'nanoid'
 import type { AppEnv } from '../types'
 import { getDb } from '../db'
-import { apiKeys, storageFiles, users, tablePolicies, sessions, accounts } from '../db/schema'
+import { apiKeys, storageFiles, users, tablePolicies, sessions, accounts, appSettings } from '../db/schema'
 import { getBindings } from '../env'
 import { getPlanCapabilities } from '../plan'
 import { requireAdmin } from '../auth/middleware'
 import { getAuth } from '../auth'
+import { getSecurityConfig, invalidateSecurityConfigCache } from '../auth/security'
 
 export const adminRoutes = new Hono<AppEnv>()
 
@@ -247,6 +248,35 @@ adminRoutes.post('/tables', requireAdmin(), async (c) => {
   const db = await getDb()
   try {
     await db.run(sql.raw(createTableSql))
+
+    // Inicializa a política recomendada de RLS (Leitura Pública, Escrita e Deleção por Dono)
+    try {
+      const detectedOwner =
+        columns.find((c: any) =>
+          ['user_id', 'userid', 'author_id', 'owner_id', 'created_by'].includes(
+            (c.name || '').toLowerCase(),
+          ),
+        )?.name || 'user_id'
+
+      const now = new Date()
+      await db.insert(tablePolicies).values({
+        id: nanoid(),
+        tableName,
+        rlsEnabled: true,
+        selectRule: 'public',
+        insertRule: 'authenticated',
+        updateRule: 'owner',
+        deleteRule: 'owner',
+        ownerColumn: detectedOwner,
+        readLevel: 'public',
+        writeLevel: 'authenticated',
+        createdAt: now,
+        updatedAt: now,
+      })
+    } catch {
+      // Política pode já existir
+    }
+
     return c.json(
       {
         success: true,
@@ -403,7 +433,7 @@ adminRoutes.post('/keys', requireAdmin(), async (c) => {
   return c.json({ success: true, data: record }, 201)
 })
 
-// Obter política de acesso da tabela
+// Obter política de acesso da tabela (Supabase-Style RLS)
 adminRoutes.get('/tables/:name/policy', requireAdmin(), async (c) => {
   const tableName = c.req.param('name').trim()
   const db = await getDb()
@@ -413,26 +443,63 @@ adminRoutes.get('/tables/:name/policy', requireAdmin(), async (c) => {
     .where(eq(tablePolicies.tableName, tableName))
     .get()
 
+  if (policy) {
+    return c.json({
+      success: true,
+      data: {
+        tableName,
+        rlsEnabled: Boolean(policy.rlsEnabled),
+        selectRule: policy.selectRule || policy.readLevel || 'public',
+        insertRule: policy.insertRule || policy.writeLevel || 'authenticated',
+        updateRule: policy.updateRule || policy.writeLevel || 'owner',
+        deleteRule: policy.deleteRule || policy.writeLevel || 'owner',
+        ownerColumn: policy.ownerColumn || 'user_id',
+        readLevel: policy.readLevel || 'public',
+        writeLevel: policy.writeLevel || 'authenticated',
+      },
+    })
+  }
+
   return c.json({
     success: true,
-    data: policy || {
+    data: {
       tableName,
+      rlsEnabled: true,
+      selectRule: 'public',
+      insertRule: 'authenticated',
+      updateRule: 'owner',
+      deleteRule: 'owner',
+      ownerColumn: 'user_id',
       readLevel: 'public',
       writeLevel: 'authenticated',
     },
   })
 })
 
-// Atualizar política de acesso da tabela
+// Atualizar política de acesso da tabela (Supabase-Style RLS)
 adminRoutes.put('/tables/:name/policy', requireAdmin(), async (c) => {
   const tableName = c.req.param('name').trim()
   const body = await c.req.json()
+
+  const validRules = ['public', 'authenticated', 'owner', 'admin', 'disabled']
+  const rlsEnabled = body.rlsEnabled !== undefined ? Boolean(body.rlsEnabled) : true
+  const selectRule = validRules.includes(body.selectRule) ? body.selectRule : 'public'
+  const insertRule = validRules.includes(body.insertRule) ? body.insertRule : 'authenticated'
+  const updateRule = validRules.includes(body.updateRule) ? body.updateRule : 'owner'
+  const deleteRule = validRules.includes(body.deleteRule) ? body.deleteRule : 'owner'
+  const ownerColumn = (body.ownerColumn || 'user_id').trim().replace(/[^a-zA-Z0-9_]/g, '')
+
   const readLevel = ['public', 'authenticated', 'admin'].includes(body.readLevel)
     ? body.readLevel
-    : 'public'
+    : selectRule === 'owner'
+      ? 'authenticated'
+      : selectRule
   const writeLevel = ['public', 'authenticated', 'admin'].includes(body.writeLevel)
     ? body.writeLevel
-    : 'authenticated'
+    : updateRule === 'owner'
+      ? 'authenticated'
+      : updateRule
+
   const now = new Date()
   const db = await getDb()
 
@@ -445,12 +512,28 @@ adminRoutes.put('/tables/:name/policy', requireAdmin(), async (c) => {
   if (existing) {
     await db
       .update(tablePolicies)
-      .set({ readLevel, writeLevel, updatedAt: now })
+      .set({
+        rlsEnabled,
+        selectRule,
+        insertRule,
+        updateRule,
+        deleteRule,
+        ownerColumn,
+        readLevel,
+        writeLevel,
+        updatedAt: now,
+      })
       .where(eq(tablePolicies.tableName, tableName))
   } else {
     await db.insert(tablePolicies).values({
       id: nanoid(),
       tableName,
+      rlsEnabled,
+      selectRule,
+      insertRule,
+      updateRule,
+      deleteRule,
+      ownerColumn,
       readLevel,
       writeLevel,
       createdAt: now,
@@ -460,7 +543,68 @@ adminRoutes.put('/tables/:name/policy', requireAdmin(), async (c) => {
 
   return c.json({
     success: true,
-    data: { tableName, readLevel, writeLevel },
+    data: {
+      tableName,
+      rlsEnabled,
+      selectRule,
+      insertRule,
+      updateRule,
+      deleteRule,
+      ownerColumn,
+      readLevel,
+      writeLevel,
+    },
+  })
+})
+
+// Obter configurações de segurança (CORS e Whitelist de IPs)
+adminRoutes.get('/settings/security', requireAdmin(), async (c) => {
+  const config = await getSecurityConfig()
+  return c.json({
+    success: true,
+    data: config,
+  })
+})
+
+// Salvar configurações de segurança (CORS e Whitelist de IPs)
+adminRoutes.put('/settings/security', requireAdmin(), async (c) => {
+  const body = await c.req.json()
+  const db = await getDb()
+  const now = new Date()
+
+  const allowedOrigins = Array.isArray(body.allowedOrigins)
+    ? body.allowedOrigins.map((o: string) => o.trim()).filter(Boolean)
+    : []
+  const allowedIps = Array.isArray(body.allowedIps)
+    ? body.allowedIps.map((ip: string) => ip.trim()).filter(Boolean)
+    : []
+  const blockExternalLocalhost = body.blockExternalLocalhost !== false
+
+  async function upsertSetting(key: string, value: string) {
+    const existing = await db.select().from(appSettings).where(eq(appSettings.key, key)).get()
+    if (existing) {
+      await db.update(appSettings).set({ value, updatedAt: now }).where(eq(appSettings.key, key))
+    } else {
+      await db.insert(appSettings).values({ key, value, createdAt: now, updatedAt: now })
+    }
+  }
+
+  await Promise.all([
+    upsertSetting('security_allowed_origins', JSON.stringify(allowedOrigins)),
+    upsertSetting('security_allowed_ips', JSON.stringify(allowedIps)),
+    upsertSetting('security_block_external_localhost', String(blockExternalLocalhost)),
+  ])
+
+  invalidateSecurityConfigCache()
+
+  return c.json({
+    success: true,
+    message: 'Configurações de segurança atualizadas com sucesso.',
+    data: {
+      allowedOrigins,
+      allowedIps,
+      blockExternalLocalhost,
+    },
   })
 })
 

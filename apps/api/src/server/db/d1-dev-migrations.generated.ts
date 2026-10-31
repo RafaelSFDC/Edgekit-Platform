@@ -132,4 +132,20 @@ CREATE TABLE \`webhooks\` (
 --> statement-breakpoint
 CREATE UNIQUE INDEX \`table_policies_table_name_unique\` ON \`table_policies\` (\`table_name\`);`,
   },
+  {
+    tag: "0002_yummy_mysterio",
+    sql: `ALTER TABLE \`table_policies\` ADD \`rls_enabled\` integer DEFAULT true NOT NULL;--> statement-breakpoint
+ALTER TABLE \`table_policies\` ADD \`select_rule\` text DEFAULT 'public' NOT NULL;--> statement-breakpoint
+ALTER TABLE \`table_policies\` ADD \`insert_rule\` text DEFAULT 'authenticated' NOT NULL;--> statement-breakpoint
+ALTER TABLE \`table_policies\` ADD \`update_rule\` text DEFAULT 'owner' NOT NULL;--> statement-breakpoint
+ALTER TABLE \`table_policies\` ADD \`delete_rule\` text DEFAULT 'owner' NOT NULL;--> statement-breakpoint
+ALTER TABLE \`table_policies\` ADD \`owner_column\` text DEFAULT 'user_id' NOT NULL;`,
+  },
+  {
+    tag: "0003_busy_komodo",
+    sql: `ALTER TABLE \`sessions\` ADD \`impersonated_by\` text;--> statement-breakpoint
+ALTER TABLE \`users\` ADD \`banned\` integer DEFAULT false;--> statement-breakpoint
+ALTER TABLE \`users\` ADD \`ban_reason\` text;--> statement-breakpoint
+ALTER TABLE \`users\` ADD \`ban_expires\` integer;`,
+  },
 ]
