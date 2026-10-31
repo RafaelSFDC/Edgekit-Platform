@@ -53,7 +53,6 @@ export function authContextMiddleware(): MiddlewareHandler<AppEnv> {
 
 export function requireAuth(): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
-    const role = c.get('role')
     const user = c.get('user')
     const apiKey = c.get('apiKey')
 

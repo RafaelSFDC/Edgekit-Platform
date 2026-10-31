@@ -26,7 +26,7 @@ export function useRealtimeStream(channel = 'global') {
         setStatus('connected');
         setMessages((prev) => [
           {
-            id: 'sys_' + Date.now(),
+            id: `sys_${Date.now()}`,
             channel,
             event: 'system:connected',
             payload: { message: `Conectado ao canal "${channel}" via Durable Object` },
@@ -40,7 +40,7 @@ export function useRealtimeStream(channel = 'global') {
         try {
           const parsed = JSON.parse(event.data);
           const msg: RealtimeMessage = {
-            id: parsed.id || 'msg_' + Date.now() + Math.random().toString(36).slice(2, 6),
+            id: parsed.id || `msg_${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
             channel: parsed.channel || channel,
             event: parsed.event || 'broadcast',
             payload: parsed.payload || parsed.data || parsed,
@@ -50,7 +50,7 @@ export function useRealtimeStream(channel = 'global') {
         } catch {
           setMessages((prev) => [
             {
-              id: 'raw_' + Date.now(),
+              id: `raw_${Date.now()}`,
               channel,
               event: 'raw',
               payload: event.data,

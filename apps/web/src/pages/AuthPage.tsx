@@ -265,6 +265,7 @@ export const AuthPage: React.FC = () => {
                           onClick={() => setDeletingUser(user)}
                           className="size-7 text-destructive hover:bg-destructive/10 cursor-pointer"
                           title="Excluir Usuário"
+                          aria-label="Excluir Usuário"
                         >
                           <Trash2 className="size-3.5" />
                         </Button>
@@ -290,8 +291,9 @@ export const AuthPage: React.FC = () => {
 
           <form onSubmit={handleCreateUser} className="space-y-3.5 py-2">
             <div>
-              <label className="text-xs font-semibold text-foreground mb-1 block">Nome Completo</label>
+              <label htmlFor="create-user-name" className="text-xs font-semibold text-foreground mb-1 block">Nome Completo</label>
               <input
+                id="create-user-name"
                 type="text"
                 required
                 value={name}
@@ -302,8 +304,9 @@ export const AuthPage: React.FC = () => {
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-foreground mb-1 block">E-mail</label>
+              <label htmlFor="create-user-email" className="text-xs font-semibold text-foreground mb-1 block">E-mail</label>
               <input
+                id="create-user-email"
                 type="email"
                 required
                 value={email}
@@ -314,8 +317,9 @@ export const AuthPage: React.FC = () => {
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-foreground mb-1 block">Senha Inicial</label>
+              <label htmlFor="create-user-password" className="text-xs font-semibold text-foreground mb-1 block">Senha Inicial</label>
               <input
+                id="create-user-password"
                 type="password"
                 required
                 minLength={6}
@@ -327,8 +331,9 @@ export const AuthPage: React.FC = () => {
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-foreground mb-1 block">Função (Nível de Acesso)</label>
+              <label htmlFor="create-user-role" className="text-xs font-semibold text-foreground mb-1 block">Função (Nível de Acesso)</label>
               <select
+                id="create-user-role"
                 value={role}
                 onChange={(e) => setRole(e.target.value as any)}
                 className="w-full bg-muted/60 border border-border rounded-md px-3 py-1.5 text-xs text-foreground font-mono focus:outline-hidden focus:ring-1 focus:ring-primary cursor-pointer"

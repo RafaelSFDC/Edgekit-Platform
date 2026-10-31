@@ -107,7 +107,7 @@ async function setupCloudflare() {
   if (createR2.status === 0 || createR2.stdout.includes('Created') || createR2.stderr.includes('already exists')) {
     console.info('✅ Bucket R2 "edgekit-platform-storage" configurado com sucesso!\n')
   } else {
-    console.info('ℹ️  Nota R2: ' + (createR2.stdout || createR2.stderr).trim() + '\n')
+    console.info(`ℹ️  Nota R2: ${(createR2.stdout || createR2.stderr).trim()}\n`)
   }
 
   // 4. Executar Migrações D1 em Produção
@@ -121,7 +121,7 @@ async function setupCloudflare() {
   if (migrateResult.status === 0) {
     console.info('✅ Todas as tabelas e schemas foram criados no Cloudflare D1!\n')
   } else {
-    console.warn('⚠️  Aviso de migração: ' + migrateResult.stderr)
+    console.warn(`⚠️  Aviso de migração: ${migrateResult.stderr}`)
   }
 
   // 5. Configurar Segredos no Worker Remoto

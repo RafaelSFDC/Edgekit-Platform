@@ -1,5 +1,4 @@
 import type { Context } from 'hono'
-import { eq } from 'drizzle-orm'
 import type { AppEnv } from '../types'
 import { getDb } from '../db'
 import { appSettings } from '../db/schema'

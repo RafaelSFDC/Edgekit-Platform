@@ -4,8 +4,8 @@ import path from 'node:path'
 
 export function generateKeys() {
   const betterAuthSecret = crypto.randomBytes(32).toString('hex')
-  const anonKey = 'hb_anon_' + crypto.randomBytes(24).toString('base64url')
-  const serviceRoleKey = 'hb_service_' + crypto.randomBytes(32).toString('base64url')
+  const anonKey = `hb_anon_${crypto.randomBytes(24).toString('base64url')}`
+  const serviceRoleKey = `hb_service_${crypto.randomBytes(32).toString('base64url')}`
 
   return {
     betterAuthSecret,

@@ -8,14 +8,11 @@ import {
   Terminal,
   Database as DbIcon,
   Shield,
-  X,
-  Layers,
   Pencil,
   Search,
   Code2,
   Lock,
   Globe,
-  UserCheck,
   Copy,
   Check,
   Sliders,
@@ -718,6 +715,7 @@ const userSessionToken = authData.token || authData.session?.token;`,
                                     className="size-6 cursor-pointer text-muted-foreground hover:text-foreground"
                                     onClick={() => handleOpenEdit(row)}
                                     title="Editar linha"
+                                    aria-label="Editar linha"
                                   >
                                     <Pencil className="size-3" />
                                   </Button>
@@ -727,6 +725,7 @@ const userSessionToken = authData.token || authData.session?.token;`,
                                     className="size-6 cursor-pointer text-destructive/80 hover:text-destructive"
                                     onClick={() => setDeletingId(String(row.id))}
                                     title={t.common.delete}
+                                    aria-label={t.common.delete}
                                   >
                                     <Trash2 className="size-3" />
                                   </Button>
@@ -838,10 +837,11 @@ const userSessionToken = authData.token || authData.session?.token;`,
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                     <div>
-                      <label className="block text-[11px] text-muted-foreground mb-1">
+                      <label htmlFor="policy-select-rule" className="block text-[11px] text-muted-foreground mb-1">
                         SELECT (Leitura de Dados)
                       </label>
                       <select
+                        id="policy-select-rule"
                         value={localPolicy.selectRule || 'public'}
                         onChange={(e) => setLocalPolicy({ ...localPolicy, selectRule: e.target.value as any })}
                         className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-xs font-mono text-foreground cursor-pointer"
@@ -855,10 +855,11 @@ const userSessionToken = authData.token || authData.session?.token;`,
                     </div>
 
                     <div>
-                      <label className="block text-[11px] text-muted-foreground mb-1">
+                      <label htmlFor="policy-insert-rule" className="block text-[11px] text-muted-foreground mb-1">
                         INSERT (Criação de Registros)
                       </label>
                       <select
+                        id="policy-insert-rule"
                         value={localPolicy.insertRule || 'authenticated'}
                         onChange={(e) => setLocalPolicy({ ...localPolicy, insertRule: e.target.value as any })}
                         className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-xs font-mono text-foreground cursor-pointer"
@@ -872,10 +873,11 @@ const userSessionToken = authData.token || authData.session?.token;`,
                     </div>
 
                     <div>
-                      <label className="block text-[11px] text-muted-foreground mb-1">
+                      <label htmlFor="policy-update-rule" className="block text-[11px] text-muted-foreground mb-1">
                         UPDATE (Edição de Registros)
                       </label>
                       <select
+                        id="policy-update-rule"
                         value={localPolicy.updateRule || 'owner'}
                         onChange={(e) => setLocalPolicy({ ...localPolicy, updateRule: e.target.value as any })}
                         className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-xs font-mono text-foreground cursor-pointer"
@@ -888,10 +890,11 @@ const userSessionToken = authData.token || authData.session?.token;`,
                     </div>
 
                     <div>
-                      <label className="block text-[11px] text-muted-foreground mb-1">
+                      <label htmlFor="policy-delete-rule" className="block text-[11px] text-muted-foreground mb-1">
                         DELETE (Exclusão de Registros)
                       </label>
                       <select
+                        id="policy-delete-rule"
                         value={localPolicy.deleteRule || 'owner'}
                         onChange={(e) => setLocalPolicy({ ...localPolicy, deleteRule: e.target.value as any })}
                         className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-xs font-mono text-foreground cursor-pointer"
@@ -906,11 +909,12 @@ const userSessionToken = authData.token || authData.session?.token;`,
 
                   {/* Coluna de Dono */}
                   <div className="pt-2">
-                    <label className="block text-[11px] text-muted-foreground mb-1">
+                    <label htmlFor="policy-owner-column" className="block text-[11px] text-muted-foreground mb-1">
                       Coluna Identificadora do Dono (Owner Column)
                     </label>
                     <div className="flex items-center gap-2">
                       <input
+                        id="policy-owner-column"
                         type="text"
                         value={localPolicy.ownerColumn || 'user_id'}
                         onChange={(e) => setLocalPolicy({ ...localPolicy, ownerColumn: e.target.value })}
@@ -1095,10 +1099,11 @@ const userSessionToken = authData.token || authData.session?.token;`,
 
           <form onSubmit={handleCreateTable} className="space-y-4 py-2">
             <div>
-              <label className="text-xs font-medium text-foreground block mb-1">
+              <label htmlFor="new-table-name" className="text-xs font-medium text-foreground block mb-1">
                 Nome da Tabela
               </label>
               <input
+                id="new-table-name"
                 type="text"
                 placeholder="ex: posts, clientes, pedidos"
                 value={newTableName}
@@ -1110,7 +1115,7 @@ const userSessionToken = authData.token || authData.session?.token;`,
 
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <label className="text-xs font-medium text-foreground">Colunas</label>
+                <span className="text-xs font-medium text-foreground">Colunas</span>
                 <Button
                   type="button"
                   variant="outline"

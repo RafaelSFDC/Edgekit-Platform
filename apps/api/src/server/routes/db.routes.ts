@@ -3,7 +3,6 @@ import { eq, sql } from 'drizzle-orm'
 import type { AppEnv } from '../types'
 import { getDatabaseRuntime, type AppDatabase } from '../db'
 import { tablePolicies, webhooks } from '../db/schema'
-import { requireAuth } from '../auth/middleware'
 import { getBindings } from '../env'
 
 export const dbRoutes = new Hono<AppEnv>()

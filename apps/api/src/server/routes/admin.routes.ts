@@ -403,7 +403,7 @@ adminRoutes.get('/keys', requireAdmin(), async (c) => {
   // Mascara chaves de serviço para segurança visual
   const sanitized = keys.map((k) => ({
     ...k,
-    keyMasked: k.type === 'service_role' ? k.key.slice(0, 12) + '...' + k.key.slice(-4) : k.key,
+    keyMasked: k.type === 'service_role' ? `${k.key.slice(0, 12)}...${k.key.slice(-4)}` : k.key,
   }))
 
   return c.json({ success: true, data: sanitized })

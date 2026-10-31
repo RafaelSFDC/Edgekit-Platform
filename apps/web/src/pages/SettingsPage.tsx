@@ -185,7 +185,7 @@ export const SettingsPage: React.FC = () => {
             {/* Origens CORS */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                <label htmlFor="cors-origin-input" className="text-xs font-semibold text-foreground flex items-center gap-1.5">
                   <Globe className="size-3.5 text-sky-500" />
                   Domínios Frontend Confiáveis (CORS Whitelist)
                 </label>
@@ -196,6 +196,7 @@ export const SettingsPage: React.FC = () => {
 
               <div className="flex items-center gap-2">
                 <input
+                  id="cors-origin-input"
                   type="text"
                   placeholder="https://meuapp.com ou https://meuapp.vercel.app"
                   value={newOrigin}
@@ -242,7 +243,7 @@ export const SettingsPage: React.FC = () => {
             {/* Whitelist de IPs */}
             <div className="space-y-2 pt-2 border-t border-border/60">
               <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                <label htmlFor="ip-whitelist-input" className="text-xs font-semibold text-foreground flex items-center gap-1.5">
                   <Lock className="size-3.5 text-emerald-500" />
                   Whitelist de IPs para Acesso Remoto
                 </label>
@@ -253,6 +254,7 @@ export const SettingsPage: React.FC = () => {
 
               <div className="flex items-center gap-2">
                 <input
+                  id="ip-whitelist-input"
                   type="text"
                   placeholder="ex: 189.40.12.33 ou 201.55.*"
                   value={newIp}
@@ -306,9 +308,10 @@ export const SettingsPage: React.FC = () => {
                   Impede que clientes externos forjem origens locais (localhost/127.0.0.1) se não estiverem na mesma máquina.
                 </span>
               </div>
-              <label className="relative inline-flex items-center cursor-pointer">
+              <label className="relative inline-flex items-center cursor-pointer" aria-label="Bloquear acessos de localhost de outros computadores">
                 <input
                   type="checkbox"
+                  aria-label="Bloquear acessos de localhost de outros computadores"
                   checked={blockExternalLocalhost}
                   onChange={(e) => setBlockExternalLocalhost(e.target.checked)}
                   className="sr-only peer"

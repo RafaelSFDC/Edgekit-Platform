@@ -15,7 +15,7 @@ import {
 } from '../hooks/api/use-storage';
 import { PageLayout } from '../components/layout/PageLayout';
 import { PageHeader } from '@/components/ui/page-header';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -39,7 +39,7 @@ function formatBytes(bytes: number, decimals = 2) {
 
 export const StoragePage: React.FC = () => {
   const { t } = useI18n();
-  const [bucket, setBucket] = useState('default');
+  const [bucket, _setBucket] = useState('default');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: files = [], refetch, isLoading } = useStorageFilesQuery(bucket);
@@ -179,7 +179,7 @@ export const StoragePage: React.FC = () => {
                           target="_blank"
                           rel="noreferrer"
                         >
-                          <Button variant="ghost" size="icon" className="size-7" title="Download">
+                          <Button variant="ghost" size="icon" className="size-7" title="Download" aria-label="Download">
                             <Download className="size-3.5" />
                           </Button>
                         </a>
@@ -189,6 +189,7 @@ export const StoragePage: React.FC = () => {
                           onClick={() => setDeletingKey(file.key)}
                           className="size-7 text-destructive hover:bg-destructive/10"
                           title={t.common.delete}
+                          aria-label={t.common.delete}
                         >
                           <Trash2 className="size-3.5" />
                         </Button>

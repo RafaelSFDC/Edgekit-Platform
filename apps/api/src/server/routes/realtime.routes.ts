@@ -25,7 +25,7 @@ realtimeRoutes.get('/:channel/ws', async (c) => {
   } else if (!target.searchParams.has('userId')) {
     target.searchParams.set(
       'userId',
-      incomingUrl.searchParams.get('userId') || 'anon_' + Math.random().toString(36).slice(2, 7),
+      incomingUrl.searchParams.get('userId') || `anon_${Math.random().toString(36).slice(2, 7)}`,
     )
     target.searchParams.set(
       'userName',

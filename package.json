@@ -25,7 +25,8 @@
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
     "test:api": "pnpm --filter @edgekit/platform-api test",
-    "test:web": "pnpm --filter @edgekit/platform-web test"
+    "test:web": "pnpm --filter @edgekit/platform-web test",
+    "lint": "oxlint"
   },
   "keywords": [
     "edgekit",
@@ -43,9 +44,13 @@
   "author": "",
   "license": "MIT",
   "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@vitejs/plugin-react": "6.1.2",
     "concurrently": "^9.1.2",
     "dotenv": "^17.3.1",
     "drizzle-kit": "^0.31.10",
+    "oxc-transform-react": "0.156.0",
+    "oxlint": "^1.90.0",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2"
   }

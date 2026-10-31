@@ -18,7 +18,7 @@ import { useAuth } from './context/auth-context';
 import { EdgekitLogo } from './components/common/EdgekitLogo';
 
 const DashboardGuard: React.FC = () => {
-  const { isAuthenticated, isLoading, isSetupComplete } = useAuth();
+  const { isAuthenticated, isLoading, isSetupComplete: _isSetupComplete } = useAuth();
 
   if (isLoading) {
     return (

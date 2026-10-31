@@ -151,11 +151,11 @@ export const LoginPage: React.FC = () => {
                     }}
                     placeholder={t.login.apiKeyPlaceholder}
                     disabled={isLoggingIn}
-                    autoFocus
                     className="w-full h-9 pl-8 pr-9 rounded-lg bg-muted/50 border border-border text-xs text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
                   />
                   <button
                     type="button"
+                    aria-label="Toggle password visibility"
                     onClick={() => setShowPassword(!showPassword)}
                     tabIndex={-1}
                     className="absolute right-2.5 text-muted-foreground hover:text-foreground cursor-pointer focus:outline-hidden"

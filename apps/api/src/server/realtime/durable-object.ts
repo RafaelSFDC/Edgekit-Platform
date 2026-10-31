@@ -25,7 +25,7 @@ export class RealtimeDurableObject extends DurableObject {
       const pair = new WebSocketPair()
       const [client, server] = [pair[0], pair[1]]
 
-      const userId = url.searchParams.get('userId') || 'anon_' + Math.random().toString(36).slice(2, 8)
+      const userId = url.searchParams.get('userId') || `anon_${Math.random().toString(36).slice(2, 8)}`
       const userName = url.searchParams.get('userName') || 'Anônimo'
       const channel = url.searchParams.get('channel') || 'global'
 
