@@ -45,6 +45,8 @@ Edgekit Platform/
 │       │   └── pages/           # Overview, Database Studio, Auth, Storage, Realtime, Settings
 │       └── vite.config.ts       # Vite + Tailwind v4 + Proxy reverso
 │
+├── examples/
+│   └── demo-app/                # Frontend Mock Consumidor (Vite + React 19) em :5174
 ├── packages/
 │   └── client/                  # SDK Isomórfico TypeScript (@edgekit/platform-client)
 ├── docs/
@@ -66,6 +68,10 @@ pnpm dev
 # Iniciar apenas o backend ou frontend individualmente
 pnpm dev:api
 pnpm dev:web
+pnpm dev:demo
+
+# Iniciar todos os serviços concorrentemente (API + Studio + Demo App)
+pnpm dev:all
 
 # Compilar todo o projeto para produção (Web SPA + Worker API)
 pnpm build

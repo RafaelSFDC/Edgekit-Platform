@@ -6,8 +6,10 @@
   "description": "Serverless, open-source Backend-as-a-Service on Cloudflare Workers, D1, R2, and Durable Objects - Edgekit Platform",
   "scripts": {
     "dev": "concurrently -n \"api,web\" -c \"magenta,cyan\" \"pnpm --filter @edgekit/platform-api dev\" \"pnpm --filter @edgekit/platform-web dev\"",
+    "dev:all": "concurrently -n \"api,web,demo\" -c \"magenta,cyan,yellow\" \"pnpm --filter @edgekit/platform-api dev\" \"pnpm --filter @edgekit/platform-web dev\" \"pnpm --filter @edgekit/demo-app dev\"",
     "dev:api": "pnpm --filter @edgekit/platform-api dev",
     "dev:web": "pnpm --filter @edgekit/platform-web dev",
+    "dev:demo": "pnpm --filter @edgekit/demo-app dev",
     "setup": "tsx scripts/setup.ts",
     "setup:local": "tsx scripts/setup.ts --local",
     "setup:cf": "tsx scripts/setup-cloudflare.ts",

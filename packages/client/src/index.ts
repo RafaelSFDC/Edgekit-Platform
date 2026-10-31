@@ -2,6 +2,8 @@ export interface EdgekitClientOptions {
   url: string
   anonKey?: string
   serviceRoleKey?: string
+  token?: string
+  credentials?: 'include' | 'omit' | 'same-origin'
   fetch?: typeof fetch
 }
 
@@ -37,6 +39,7 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
   const baseUrl = options.url.replace(/\/+$/, '')
   const apiKey = options.serviceRoleKey || options.anonKey || ''
   const customFetch = options.fetch || globalThis.fetch
+  const fetchCredentials = options.credentials || 'include'
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -44,6 +47,30 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
   if (apiKey) {
     headers['apikey'] = apiKey
     headers['Authorization'] = `Bearer ${apiKey}`
+  }
+  if (options.token) {
+    headers['Authorization'] = `Bearer ${options.token}`
+  }
+
+  function setToken(token: string | null) {
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    } else if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`
+    } else {
+      delete headers['Authorization']
+    }
+  }
+
+  function req(init: Record<string, any> = {}): any {
+    const r: Record<string, any> = {
+      headers,
+      ...init,
+    }
+    if (fetchCredentials) {
+      r.credentials = fetchCredentials
+    }
+    return r
   }
 
   // 1. REALTIME CLIENT (Durable Objects WebSockets Multiplexed)
@@ -253,9 +280,7 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
       async execute() {
         try {
           const queryString = params.toString() ? `?${params.toString()}` : ''
-          const res = await customFetch(`${baseUrl}/api/v1/db/${table}${queryString}`, {
-            headers,
-          })
+          const res = await customFetch(`${baseUrl}/api/v1/db/${table}${queryString}`, req())
           const json: any = await res.json()
           if (!res.ok || !json.success) {
             return { data: null, error: new Error(json.error?.message || 'Database error') }
@@ -271,11 +296,13 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
       ...builder,
       async insert(recordOrRecords: any) {
         try {
-          const res = await customFetch(`${baseUrl}/api/v1/db/${table}`, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(recordOrRecords),
-          })
+          const res = await customFetch(
+            `${baseUrl}/api/v1/db/${table}`,
+            req({
+              method: 'POST',
+              body: JSON.stringify(recordOrRecords),
+            }),
+          )
           const json: any = await res.json()
           if (!res.ok || !json.success) {
             return { data: null, error: new Error(json.error?.message || 'Insert error') }
@@ -289,11 +316,13 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
         return {
           async eq(col: string, id: any) {
             try {
-              const res = await customFetch(`${baseUrl}/api/v1/db/${table}/${id}`, {
-                method: 'PATCH',
-                headers,
-                body: JSON.stringify(updates),
-              })
+              const res = await customFetch(
+                `${baseUrl}/api/v1/db/${table}/${id}`,
+                req({
+                  method: 'PATCH',
+                  body: JSON.stringify(updates),
+                }),
+              )
               const json: any = await res.json()
               if (!res.ok || !json.success) {
                 return { data: null, error: new Error(json.error?.message || 'Update error') }
@@ -309,10 +338,10 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
         return {
           async eq(col: string, id: any) {
             try {
-              const res = await customFetch(`${baseUrl}/api/v1/db/${table}/${id}`, {
-                method: 'DELETE',
-                headers,
-              })
+              const res = await customFetch(
+                `${baseUrl}/api/v1/db/${table}/${id}`,
+                req({ method: 'DELETE' }),
+              )
               const json: any = await res.json()
               if (!res.ok || !json.success) {
                 return { data: null, error: new Error(json.error?.message || 'Delete error') }
@@ -347,11 +376,13 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
         offset?: number
       }) {
         try {
-          const res = await customFetch(`${baseUrl}/api/v1/db/${table}/query`, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(structuredSpec),
-          })
+          const res = await customFetch(
+            `${baseUrl}/api/v1/db/${table}/query`,
+            req({
+              method: 'POST',
+              body: JSON.stringify(structuredSpec),
+            }),
+          )
           const json: any = await res.json()
           if (!res.ok || !json.success) {
             return { data: null, error: new Error(json.error?.message || 'Query error') }
@@ -376,26 +407,27 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
           const authHeaders = { ...headers }
           delete (authHeaders as any)['Content-Type']
 
-          const res = await customFetch(`${baseUrl}/api/v1/storage/${bucket}/upload`, {
-            method: 'POST',
-            headers: authHeaders,
-            body: formData,
-          })
+          const res = await customFetch(
+            `${baseUrl}/api/v1/storage/${bucket}/upload`,
+            req({
+              method: 'POST',
+              headers: authHeaders,
+              body: formData,
+            }),
+          )
           const json: any = await res.json()
           return { data: json.data || null, error: json.error ? new Error(json.error.message) : null }
         },
         async delete(path: string) {
-          const res = await customFetch(`${baseUrl}/api/v1/storage/${bucket}/file/${path}`, {
-            method: 'DELETE',
-            headers,
-          })
+          const res = await customFetch(
+            `${baseUrl}/api/v1/storage/${bucket}/file/${path}`,
+            req({ method: 'DELETE' }),
+          )
           const json: any = await res.json()
           return { data: json, error: !res.ok ? new Error(json.error?.message || 'Delete error') : null }
         },
         async list() {
-          const res = await customFetch(`${baseUrl}/api/v1/storage/${bucket}/list`, {
-            headers,
-          })
+          const res = await customFetch(`${baseUrl}/api/v1/storage/${bucket}/list`, req())
           const json: any = await res.json()
           return { data: json.data || [], error: !res.ok ? new Error(json.error?.message || 'List error') : null }
         },
@@ -413,27 +445,56 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
   // 4. AUTH CLIENT
   const auth = {
     async getUser() {
-      const res = await customFetch(`${baseUrl}/api/v1/auth/me`, { headers })
+      const res = await customFetch(`${baseUrl}/api/v1/auth/me`, req())
+      const json: any = await res.json()
+      return {
+        data: json.data || null,
+        error: json.error ? new Error(json.error.message) : null,
+      }
+    },
+    async getSession() {
+      const res = await customFetch(`${baseUrl}/api/v1/auth/me`, req())
       const json: any = await res.json()
       return { data: json.data || null, error: json.error ? new Error(json.error.message) : null }
     },
     async signInWithPassword(params: { email: string; password: string }) {
-      const res = await customFetch(`${baseUrl}/api/v1/auth/sign-in/email`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(params),
-      })
+      const res = await customFetch(
+        `${baseUrl}/api/v1/auth/sign-in/email`,
+        req({
+          method: 'POST',
+          body: JSON.stringify(params),
+        }),
+      )
       const json: any = await res.json()
-      return { data: json, error: !res.ok ? new Error(json.message || 'Falha ao autenticar') : null }
+      if (json?.token) {
+        setToken(json.token)
+      }
+      return { data: json, error: !res.ok ? new Error(json?.message || 'Falha ao autenticar') : null }
     },
     async signUp(params: { name: string; email: string; password: string }) {
-      const res = await customFetch(`${baseUrl}/api/v1/auth/sign-up/email`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(params),
-      })
+      const res = await customFetch(
+        `${baseUrl}/api/v1/auth/sign-up/email`,
+        req({
+          method: 'POST',
+          body: JSON.stringify(params),
+        }),
+      )
       const json: any = await res.json()
-      return { data: json, error: !res.ok ? new Error(json.message || 'Falha ao cadastrar') : null }
+      if (json?.token) {
+        setToken(json.token)
+      }
+      return { data: json, error: !res.ok ? new Error(json?.message || 'Falha ao cadastrar') : null }
+    },
+    async signOut() {
+      const res = await customFetch(
+        `${baseUrl}/api/v1/auth/sign-out`,
+        req({
+          method: 'POST',
+          body: JSON.stringify({}),
+        }),
+      )
+      setToken(null)
+      return { data: true, error: !res.ok ? new Error('Falha ao deslogar') : null }
     },
   }
 
@@ -442,6 +503,7 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
     storage,
     realtime,
     auth,
+    setToken,
     url: baseUrl,
   }
 }
