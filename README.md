@@ -24,7 +24,7 @@ O **Edgekit Platform** é uma plataforma completa e integrada para desenvolvedor
 - **Segurança Deny-by-Default:** Tabelas fechadas por padrão, chaves de API com hash SHA-256 e Policy Engine compilada diretamente em consultas SQL seguras.
 - **Identidades Separadas:** Administradores da plataforma (`_ek_admins`) são isolados dos usuários finais da aplicação (`users`).
 
-📖 **Para detalhes completos da arquitetura, consulte a documentação oficial em [`docs/architecture/`](./docs/architecture/README.md).**
+📖 **Para entender as decisões de arquitetura e o porquê de cada escolha, consulte [`docs/product.md`](./docs/product.md) e as especificações técnicas por domínio em [`docs/domains/`](./docs/domains/).**
 
 ---
 
