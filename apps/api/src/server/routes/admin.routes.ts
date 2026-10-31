@@ -27,7 +27,7 @@ import {
   ADMIN_COOKIE_NAME,
   HOST_ADMIN_COOKIE_NAME,
 } from '../auth/admin-auth'
-import { createApiKey, ensureDefaultKeys } from '../auth/keys'
+import { createApiKey, ensureDefaultKeys, validateApiKey } from '../auth/keys'
 import { getSecurityConfig, invalidateSecurityConfigCache, isLocalhostOrigin } from '../auth/security'
 import { AdminSetupSchema, AdminLoginSchema, CreateApiKeySchema } from '../schemas'
 import { invalidateTableColumnsCache } from './db.routes'
@@ -205,9 +205,50 @@ adminRoutes.post('/setup', async (c) => {
   }
 })
 
-// Login Administrativo do Painel (Email + Senha dos membros de _ek_admins)
+// Login Administrativo do Painel (Email + Senha dos membros de _ek_admins ou Chave de Serviço)
 adminRoutes.post('/login', async (c) => {
   const body = await c.req.json().catch(() => ({}))
+  const db = await getDb()
+
+  // 1. Caso A: Login com Chave Secreta (Service Role Key)
+  const passkey =
+    body.passkey ||
+    body.secret ||
+    body.key ||
+    c.req.header('x-app-secret') ||
+    c.req.header('x-api-key') ||
+    c.req.header('apikey')
+
+  if (passkey && typeof passkey === 'string' && passkey.trim()) {
+    const cleanKey = passkey.trim()
+    const validated = await validateApiKey(db, cleanKey)
+
+    if (!validated || validated.type !== 'service_role') {
+      return c.json(
+        {
+          success: false,
+          authenticated: false,
+          error: {
+            code: 'INVALID_CREDENTIALS',
+            message: 'Chave de acesso inválida ou sem privilégios de service_role.',
+          },
+        },
+        401,
+      )
+    }
+
+    return c.json({
+      success: true,
+      authenticated: true,
+      role: 'service_role',
+      key: {
+        name: validated.name,
+        type: validated.type,
+      },
+    })
+  }
+
+  // 2. Caso B: Login com E-mail e Senha de Membro da Plataforma (_ek_admins)
   const parsed = AdminLoginSchema.safeParse(body)
   if (!parsed.success) {
     return c.json(
@@ -215,7 +256,7 @@ adminRoutes.post('/login', async (c) => {
         success: false,
         error: {
           code: 'INVALID_INPUT',
-          message: parsed.error.errors[0]?.message || 'Informe e-mail e senha de administrador válidos.',
+          message: parsed.error.errors[0]?.message || 'Informe e-mail e senha de administrador válidos ou uma chave service_role.',
         },
       },
       400,
@@ -223,7 +264,6 @@ adminRoutes.post('/login', async (c) => {
   }
 
   const { email, password } = parsed.data
-  const db = await getDb()
   const admin = await db.select().from(ekAdmins).where(eq(ekAdmins.email, email)).get()
 
   if (!admin) {

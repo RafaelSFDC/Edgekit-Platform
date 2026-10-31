@@ -270,7 +270,7 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
           return { data: null, error: err }
         }
       },
-      async update(updates: any) {
+      update(updates: any) {
         return {
           async eq(col: string, id: any) {
             try {
@@ -290,7 +290,7 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
           },
         }
       },
-      async delete() {
+      delete() {
         return {
           async eq(col: string, id: any) {
             try {

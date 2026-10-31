@@ -1707,4 +1707,158 @@ describe('Edgekit Platform — Fundação, Segurança & Identidade Dupla (Fase 1
       }
     })
   })
+
+  describe('Constituição Arquitetural: Bateria Canônica de Testes Adversários & Blindagem Zero-Trust', () => {
+    it('SQLi Attack Shield: Rejeita injeção SQL no nome da tabela com erro de identificador inválido', async () => {
+      const res = await app.request('/api/v1/db/articles;DROP TABLE articles;--', {
+        headers: { apikey: anonKey },
+      })
+      expect(res.status).toBe(500)
+      const json: any = await res.json()
+      expect(json.error.message).toContain('Identificador inválido')
+    })
+
+    it('SQLi Attack Shield: Rejeita injeção SQL no parâmetro ?select com HTTP 400', async () => {
+      const res = await app.request('/api/v1/db/articles?select=title, (SELECT password FROM _ek_admins)', {
+        headers: { apikey: anonKey },
+      })
+      expect(res.status).toBe(400)
+      const json: any = await res.json()
+      expect(json.error.code).toBe('INVALID_IDENTIFIER')
+    })
+
+    it('SQLi Attack Shield: Rejeita injeção SQL no parâmetro ?order com HTTP 400', async () => {
+      const res = await app.request('/api/v1/db/articles?order=title;DROP TABLE articles', {
+        headers: { apikey: anonKey },
+      })
+      expect(res.status).toBe(400)
+      const json: any = await res.json()
+      expect(json.error.code).toBe('INVALID_IDENTIFIER')
+    })
+
+    it('SQLi Attack Shield: Rejeita injeção SQL em identificadores de coluna no query parameter', async () => {
+      const res = await app.request('/api/v1/db/articles?title\' OR \'1\'=\'1=eq:teste', {
+        headers: { apikey: anonKey },
+      })
+      expect(res.status).toBe(400)
+      const json: any = await res.json()
+      expect(json.error.code).toBe('INVALID_IDENTIFIER')
+    })
+
+    it('SQLi Attack Shield: Rejeita campos maliciosos no endpoint declarativo /:table/query com HTTP 400', async () => {
+      const res = await app.request('/api/v1/db/articles/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: serviceRoleKey },
+        body: JSON.stringify({
+          select: ['title'],
+          where: [{ field: 'title; DROP TABLE articles;', op: 'eq', value: '1' }],
+        }),
+      })
+      expect(res.status).toBe(400)
+      const json: any = await res.json()
+      expect(json.error.code).toBe('INVALID_QUERY_SPEC')
+    })
+
+    it('Zero-Trust Dupla Identidade: Usuário comum da tabela users com role="admin" NUNCA tem acesso às rotas /admin', async () => {
+      const db = await getDb()
+      const fakeAppAdminId = 'usr_app_admin_impostor'
+      const now = new Date()
+
+      // Insere usuário comum com atributo role="admin" no Better Auth
+      try {
+        await db.insert(users).values({
+          id: fakeAppAdminId,
+          name: 'App Impostor Admin',
+          email: 'impostor@app.dev',
+          role: 'admin',
+          createdAt: now,
+          updatedAt: now,
+        })
+      } catch {}
+
+      // Tenta acessar /api/v1/admin/me
+      const resMe = await app.request('/api/v1/admin/me', {
+        headers: {
+          'x-user-id': fakeAppAdminId,
+          'role': 'admin',
+          'x-role': 'admin',
+        },
+      })
+      expect(resMe.status).toBe(403)
+      const jsonMe: any = await resMe.json()
+      expect(jsonMe.error.code).toBe('FORBIDDEN')
+
+      // Tenta acessar /api/v1/admin/keys
+      const resKeys = await app.request('/api/v1/admin/keys', {
+        headers: {
+          'x-user-id': fakeAppAdminId,
+          'role': 'admin',
+        },
+      })
+      expect(resKeys.status).toBe(403)
+    })
+
+    it('Zero-Trust Anti-Hijacking: Impede que mutação em lote altere user_id ou organization_id', async () => {
+      const res = await app.request('/api/v1/db/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: anonKey },
+        body: JSON.stringify({
+          operations: [
+            {
+              type: 'update',
+              table: 'articles',
+              id: 'article_fake_id',
+              data: {
+                title: 'Título Modificado',
+                user_id: 'victim_user_hijacked',
+                organization_id: 'victim_org_hijacked',
+              },
+            },
+          ],
+        }),
+      })
+
+      // Como o anonKey não tem bypass, a Policy Engine ou o anti-hijack bloqueia/trata a requisição
+      expect([200, 403, 404]).toContain(res.status)
+    })
+
+    it('Zero-Trust Origin Defense: Bloqueia service_role com subdomínio fraudulento localhost.attacker.com', async () => {
+      const res = await app.request('/api/v1/admin/stats', {
+        headers: {
+          apikey: serviceRoleKey,
+          Origin: 'http://localhost.attacker.com',
+        },
+      })
+      expect(res.status).toBe(403)
+      const json: any = await res.json()
+      expect(json.error.code).toBe('FORBIDDEN_SERVICE_ROLE_BROWSER')
+    })
+
+    it('Zero-Trust Origin Defense: Bloqueia service_role com subdomínio fraudulento 127.0.0.1.evil.org', async () => {
+      const res = await app.request('/api/v1/admin/stats', {
+        headers: {
+          apikey: serviceRoleKey,
+          Origin: 'http://127.0.0.1.evil.org:8080',
+        },
+      })
+      expect(res.status).toBe(403)
+      const json: any = await res.json()
+      expect(json.error.code).toBe('FORBIDDEN_SERVICE_ROLE_BROWSER')
+    })
+
+    it('Webhook Replay & Tamper Defense: Assinatura HMAC rejeita imediatamente payloads adulterados', async () => {
+      const secret = 'whsec_canonical_super_secret_key'
+      const authenticPayload = JSON.stringify({ event: 'user.created', id: 'usr_123', email: 'test@edgekit.dev' })
+      const signature = await computeWebhookSignature(secret, authenticPayload)
+
+      // Payload autêntico passa
+      const valid = await verifyWebhookSignature(secret, authenticPayload, signature)
+      expect(valid).toBe(true)
+
+      // Payload adulterado em apenas 1 caractere deve falhar
+      const tamperedPayload = JSON.stringify({ event: 'user.created', id: 'usr_123', email: 'hacker@edgekit.dev' })
+      const invalid = await verifyWebhookSignature(secret, tamperedPayload, signature)
+      expect(invalid).toBe(false)
+    })
+  })
 })

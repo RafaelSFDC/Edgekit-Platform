@@ -42,7 +42,7 @@ function getHeaders(customHeaders?: Record<string, string>): Record<string, stri
 
 export async function fetchAuthMe(): Promise<{ authenticated: boolean; data?: any }> {
   try {
-    const res = await fetch(`${API_BASE}/api/v1/auth/me`, {
+    const res = await fetch(`${API_BASE}/api/v1/admin/me`, {
       headers: getHeaders(),
       credentials: 'include',
     });
@@ -51,7 +51,7 @@ export async function fetchAuthMe(): Promise<{ authenticated: boolean; data?: an
     }
     const json = await res.json();
     return {
-      authenticated: Boolean(json.authenticated),
+      authenticated: Boolean(json.success && (json.data?.admin || json.data?.apiKey)),
       data: json.data,
     };
   } catch {
@@ -61,11 +61,11 @@ export async function fetchAuthMe(): Promise<{ authenticated: boolean; data?: an
 
 export async function loginAuth(passkey: string): Promise<{ authenticated: boolean; role?: string }> {
   const clean = passkey.trim();
-  const res = await fetch(`${API_BASE}/api/v1/auth/login`, {
+  const res = await fetch(`${API_BASE}/api/v1/admin/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ passkey: clean }),
+    body: JSON.stringify({ key: clean }),
   });
 
   const json = await res.json().catch(() => ({ authenticated: false }));
@@ -86,7 +86,7 @@ export async function loginAuth(passkey: string): Promise<{ authenticated: boole
 
 export async function logoutAuth(): Promise<{ authenticated: boolean }> {
   try {
-    await fetch(`${API_BASE}/api/v1/auth/logout`, {
+    await fetch(`${API_BASE}/api/v1/admin/logout`, {
       method: 'POST',
       credentials: 'include',
     });
@@ -132,7 +132,7 @@ export async function loginAdminCredentials(credentials: {
   email: string;
   password: string;
 }): Promise<{ authenticated: boolean; role?: string; admin?: any }> {
-  const res = await fetch(`${API_BASE}/api/v1/auth/login`, {
+  const res = await fetch(`${API_BASE}/api/v1/admin/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',

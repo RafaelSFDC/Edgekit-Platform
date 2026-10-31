@@ -149,6 +149,12 @@ export class RealtimeDurableObject extends DurableObject {
             session.channels.push(cleanChannel)
             ;(ws as any).serializeAttachment(session)
 
+            try {
+              if (typeof (this.ctx as any).setWebSocketTags === 'function') {
+                (this.ctx as any).setWebSocketTags(ws, session.channels)
+              }
+            } catch {}
+
             // Emite notificação de presença
             this.broadcast(cleanChannel, {
               id: crypto.randomUUID(),
@@ -177,6 +183,12 @@ export class RealtimeDurableObject extends DurableObject {
           const cleanChannel = channelToUnsub.trim()
           session.channels = session.channels.filter((c) => c !== cleanChannel)
           ;(ws as any).serializeAttachment(session)
+
+          try {
+            if (typeof (this.ctx as any).setWebSocketTags === 'function') {
+              (this.ctx as any).setWebSocketTags(ws, session.channels)
+            }
+          } catch {}
 
           this.broadcast(cleanChannel, {
             id: crypto.randomUUID(),
@@ -251,10 +263,48 @@ export class RealtimeDurableObject extends DurableObject {
     }
   }
 
+  async webSocketError(ws: WebSocket, _error: any) {
+    try {
+      const session = (ws as any).deserializeAttachment() as WebSocketAttachment | null
+      if (session && session.channels && session.channels.length > 0) {
+        for (const channel of session.channels) {
+          this.broadcast(channel, {
+            id: crypto.randomUUID(),
+            channel,
+            event: 'presence.leave',
+            payload: { userId: session.userId, userName: session.userName },
+            timestamp: Date.now(),
+          })
+        }
+      }
+    } catch {
+      // Ignora erro em falha de conexão
+    }
+  }
+
   private broadcast(channel: string, message: RealtimeMessage): number {
     const payload = JSON.stringify(message)
     let delivered = 0
 
+    // 1. Otimização por tags se suportado nativamente pelo Hibernation API
+    try {
+      const taggedSockets =
+        typeof (this.ctx as any).getWebSockets === 'function'
+          ? (this.ctx as any).getWebSockets(channel)
+          : null
+
+      if (taggedSockets && taggedSockets.length > 0) {
+        for (const ws of taggedSockets) {
+          try {
+            ws.send(payload)
+            delivered++
+          } catch {}
+        }
+        return delivered
+      }
+    } catch {}
+
+    // 2. Fallback resiliente: itera todas as conexões hibernadas inspecionando attachment
     for (const ws of this.ctx.getWebSockets()) {
       try {
         const session = (ws as any).deserializeAttachment() as WebSocketAttachment | null
