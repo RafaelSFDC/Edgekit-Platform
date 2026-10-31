@@ -5,8 +5,6 @@ export interface EdgekitClientOptions {
   fetch?: typeof fetch
 }
 
-export type HonoBaseClientOptions = EdgekitClientOptions
-
 export interface QueryBuilder<T = any> {
   select(columns: string): QueryBuilder<T>
   eq(column: string, value: any): QueryBuilder<T>
@@ -347,5 +345,3 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
   }
 }
 
-// Backwards compatibility alias
-export const createHonoBaseClient = createEdgekitClient

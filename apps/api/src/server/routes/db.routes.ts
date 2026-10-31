@@ -101,8 +101,7 @@ async function broadcastDatabaseEvent(
 
     // 1. Emissão para Durable Object WebSocket
     if (bindings.REALTIME) {
-      const channel = `db:${table}`
-      const stub = bindings.REALTIME.getByName(channel)
+      const stub = bindings.REALTIME.getByName('realtime_hub')
       const broadcastReq = new Request('http://internal/broadcast', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -306,7 +305,153 @@ dbRoutes.get('/:table/:id', async (c) => {
   }
 })
 
-// Inserir registro(s) com Policy Engine e CDC Broadcast
+async function executeBatchQueries(db: AppDatabase, queries: SQL[]): Promise<any[]> {
+  if (queries.length === 0) return []
+  if (typeof (db as any).batch === 'function') {
+    // Cloudflare D1 nativo via Drizzle D1
+    return await (db as any).batch(queries)
+  }
+  // Better-SQLite3 em modo transacional atômico síncrono
+  const results: any[] = []
+  if (typeof (db as any).transaction === 'function') {
+    ;(db as any).transaction((tx: any) => {
+      for (const q of queries) {
+        try {
+          results.push(tx.all(q))
+        } catch {
+          results.push(tx.run(q))
+        }
+      }
+    })
+    return results
+  }
+  for (const q of queries) {
+    try {
+      results.push(await db.all(q))
+    } catch {
+      results.push(await db.run(q))
+    }
+  }
+  return results
+}
+
+// Mutações Atômicas Transacionais em Lote (Batch API com db.batch)
+dbRoutes.post('/batch', async (c) => {
+  const runtime = await getDatabaseRuntime()
+  const db = runtime.db
+
+  const body = await c.req.json().catch(() => ({}))
+  const operations: Array<{
+    type: 'insert' | 'update' | 'delete'
+    table: string
+    id?: string
+    data?: any
+  }> = body.operations || body.mutations || []
+
+  if (!Array.isArray(operations) || operations.length === 0) {
+    return c.json(
+      { success: false, error: { message: 'Informe a lista de operações no campo "operations".' } },
+      400,
+    )
+  }
+
+  try {
+    const queries: SQL[] = []
+    const opsMeta: Array<{ type: 'insert' | 'update' | 'delete'; table: string; record: any }> = []
+
+    for (const op of operations) {
+      const table = sanitizeIdentifier(op.table)
+      const action = op.type.toLowerCase() as CrudAction
+      const access = await resolveTableAccessWithEngine(db, table, c, action)
+
+      if (action === 'insert') {
+        const record = { ...op.data }
+        if (access.injectValues) {
+          Object.assign(record, access.injectValues)
+        }
+        if (!record.id) {
+          record.id = crypto.randomUUID()
+        }
+        const keys = Object.keys(record)
+        for (const k of keys) {
+          sanitizeIdentifier(k)
+        }
+        const columnsSql = sql.raw(keys.map((k) => `\`${k}\``).join(', '))
+        const valuesSql = sql.join(
+          keys.map((k) => sql`${record[k]}`),
+          sql.raw(', '),
+        )
+        queries.push(
+          sql`INSERT INTO ${sql.raw(`\`${table}\``)} (${columnsSql}) VALUES (${valuesSql}) RETURNING *`,
+        )
+        opsMeta.push({ type: 'insert', table, record })
+      } else if (action === 'update') {
+        const id = op.id || op.data?.id
+        if (!id) {
+          throw new Error('ID é obrigatório para operações de update em lote.')
+        }
+        const data = { ...op.data }
+        delete data.id
+        const keys = Object.keys(data)
+        for (const k of keys) {
+          sanitizeIdentifier(k)
+        }
+        const setClauses = sql.join(
+          keys.map((k) => sql`${sql.raw(`\`${k}\``)} = ${data[k]}`),
+          sql.raw(', '),
+        )
+        const whereConditions = [sql`\`id\` = ${id}`]
+        if (access.whereCondition) {
+          whereConditions.push(access.whereCondition)
+        }
+        const whereClause = sql.join(whereConditions, sql.raw(' AND '))
+        queries.push(
+          sql`UPDATE ${sql.raw(`\`${table}\``)} SET ${setClauses} WHERE ${whereClause} RETURNING *`,
+        )
+        opsMeta.push({ type: 'update', table, record: { id, ...data } })
+      } else if (action === 'delete') {
+        const id = op.id
+        if (!id) {
+          throw new Error('ID é obrigatório para operações de delete em lote.')
+        }
+        const whereConditions = [sql`\`id\` = ${id}`]
+        if (access.whereCondition) {
+          whereConditions.push(access.whereCondition)
+        }
+        const whereClause = sql.join(whereConditions, sql.raw(' AND '))
+        queries.push(sql`DELETE FROM ${sql.raw(`\`${table}\``)} WHERE ${whereClause} RETURNING *`)
+        opsMeta.push({ type: 'delete', table, record: { id } })
+      }
+    }
+
+    // Execução atômica no D1 / SQLite
+    const rawResults = await executeBatchQueries(db, queries)
+
+    // Emissão CDC para cada registro modificado
+    for (let i = 0; i < opsMeta.length; i++) {
+      const meta = opsMeta[i]
+      const resRow = rawResults[i]?.[0] || meta.record
+      await broadcastDatabaseEvent(c, meta.table, meta.type.toUpperCase() as any, resRow)
+    }
+
+    return c.json(
+      {
+        success: true,
+        data: rawResults.map((r) => (Array.isArray(r) ? r[0] : r)),
+        count: operations.length,
+      },
+      200,
+    )
+  } catch (err: any) {
+    const isForbidden = err.message?.includes('Acesso negado') || err.message?.includes('Acesso restrito')
+    return c.json(
+      { success: false, error: { code: isForbidden ? 'FORBIDDEN' : 'BATCH_ERROR', message: err.message } },
+      isForbidden ? 403 : 500,
+    )
+  }
+})
+
+// Inserir registro(s) com Policy Engine, mutação atômica em lote e CDC Broadcast
 dbRoutes.post('/:table', async (c) => {
   const table = c.req.param('table')
   const runtime = await getDatabaseRuntime()
@@ -322,37 +467,42 @@ dbRoutes.post('/:table', async (c) => {
       return c.json({ success: false, error: { message: 'Nenhum registro para inserir.' } }, 400)
     }
 
-    const results = []
+    const queries: SQL[] = []
+    const preparedRecords: any[] = []
 
     for (const record of records) {
-      // Injeta valores forçados pela Policy Engine (ex: user_id do autor)
+      const row = { ...record }
       if (access.injectValues) {
-        Object.assign(record, access.injectValues)
+        Object.assign(row, access.injectValues)
+      }
+      if (!row.id) {
+        row.id = crypto.randomUUID()
       }
 
-      // Se não possui ID explícito, gera nanoid padrão
-      if (!record.id) {
-        record.id = crypto.randomUUID()
-      }
-
-      const keys = Object.keys(record)
+      const keys = Object.keys(row)
       for (const k of keys) {
         sanitizeIdentifier(k)
       }
 
       const columnsSql = sql.raw(keys.map((k) => `\`${k}\``).join(', '))
       const valuesSql = sql.join(
-        keys.map((k) => sql`${record[k]}`),
+        keys.map((k) => sql`${row[k]}`),
         sql.raw(', '),
       )
 
-      const insertQuery = sql`INSERT INTO ${sql.raw(`\`${table}\``)} (${columnsSql}) VALUES (${valuesSql}) RETURNING *`
-      const inserted: any[] = await db.all(insertQuery)
-      const newRecord = inserted[0] || record
-      results.push(newRecord)
+      queries.push(
+        sql`INSERT INTO ${sql.raw(`\`${table}\``)} (${columnsSql}) VALUES (${valuesSql}) RETURNING *`,
+      )
+      preparedRecords.push(row)
+    }
 
-      // Emissão CDC para cada registro inserido
-      await broadcastDatabaseEvent(c, table, 'INSERT', newRecord)
+    // Executa mutações atômicas via db.batch
+    const rawBatch = await executeBatchQueries(db, queries)
+    const results = rawBatch.map((resArr, idx) => (Array.isArray(resArr) ? resArr[0] : resArr) || preparedRecords[idx])
+
+    // Emissão CDC para cada registro inserido
+    for (const item of results) {
+      await broadcastDatabaseEvent(c, table, 'INSERT', item)
     }
 
     return c.json(

@@ -67,9 +67,8 @@ export const FileUploadDropzone: React.FC<FileUploadDropzoneProps> = ({
       />
 
       {!selectedFile ? (
-        <div
-          role="button"
-          tabIndex={0}
+        <button
+          type="button"
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
@@ -80,7 +79,7 @@ export const FileUploadDropzone: React.FC<FileUploadDropzoneProps> = ({
               fileInputRef.current?.click();
             }
           }}
-          className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-2 ${
+          className={`w-full border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-2 ${
             isDragOver
               ? 'border-primary bg-primary/10'
               : 'border-border/70 hover:border-primary/50 bg-card/40 hover:bg-card/60'
@@ -97,7 +96,7 @@ export const FileUploadDropzone: React.FC<FileUploadDropzoneProps> = ({
               Upload direto no Cloudflare R2 para o bucket <strong className="font-mono text-foreground">{bucket}</strong>
             </p>
           </div>
-        </div>
+        </button>
       ) : (
         <div className="p-3.5 rounded-xl border border-border/70 bg-card/50 space-y-3">
           <div className="flex items-center justify-between">

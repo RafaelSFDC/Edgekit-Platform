@@ -1,6 +1,7 @@
 import { betterAuth } from 'better-auth'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
-import { bearer, admin, organization, twoFactor, magicLink, emailOTP } from 'better-auth/plugins'
+import { bearer, jwt, admin, organization, twoFactor, magicLink, emailOTP } from 'better-auth/plugins'
+import { passkey } from '@better-auth/passkey'
 import { getDatabaseRuntime, schema } from '../db'
 import { getBindings } from '../env'
 import { ensureDefaultKeys } from './keys'
@@ -35,10 +36,14 @@ export async function getAuth() {
         member: schema.members,
         invitation: schema.invitations,
         twoFactor: schema.twoFactors,
+        passkey: schema.passkeys,
+        jwks: schema.jwks,
       },
     }),
     plugins: [
       bearer(),
+      jwt(),
+      passkey(),
       admin(),
       organization(),
       twoFactor({

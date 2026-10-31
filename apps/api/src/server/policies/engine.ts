@@ -153,17 +153,32 @@ export function evaluateTablePolicy(
     }
   }
 
-  // 6. Regra Customizada SQL segura
+  // 6. Regra Customizada SQL segura com guardrails contra SQL Injection
   if (rule === 'custom_sql' && policy.customRule) {
     const rawExpression = policy.customRule.trim()
-    // Substitui variáveis parametrizadas @auth.id e @auth.role
-    const authId = context.user?.id || ''
-    const authRole = context.user?.role || context.role || 'anon'
+
+    // Guardrail rigoroso contra quebra de contexto e injeção de múltiplas instruções
+    if (
+      rawExpression.includes(';') ||
+      rawExpression.includes('--') ||
+      rawExpression.includes('/*') ||
+      rawExpression.includes('*/') ||
+      /\b(ATTACH|DETACH|PRAGMA)\b/i.test(rawExpression)
+    ) {
+      return {
+        allowed: false,
+        error: `Acesso negado: a expressão custom_sql da tabela "${tableName}" contém caracteres ou palavras-chave proibidas (; , --, /*, PRAGMA).`,
+      }
+    }
+
+    // Substitui variáveis parametrizadas @auth.id e @auth.role com sanitização estrita
+    const authId = (context.user?.id || '').replace(/['";\\]/g, '')
+    const authRole = (context.user?.role || context.role || 'anon').replace(/['";\\]/g, '')
 
     const processedCondition = sql`(${sql.raw(
       rawExpression
-        .replace(/@auth\.id/g, `'${authId.replace(/'/g, "''")}'`)
-        .replace(/@auth\.role/g, `'${authRole.replace(/'/g, "''")}'`),
+        .replace(/@auth\.id/g, `'${authId}'`)
+        .replace(/@auth\.role/g, `'${authRole}'`),
     )})`
 
     return {

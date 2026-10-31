@@ -236,10 +236,18 @@ export async function getFile(
     const object: any = await bindings.STORAGE_BUCKET.get(key, r2Options)
     if (!object || !object.body) return null
 
+    let contentRange: string | undefined
+    if (range && range.offset !== undefined) {
+      const start = range.offset
+      const end = range.length ? start + range.length - 1 : object.size - 1
+      contentRange = `bytes ${start}-${end}/${object.size}`
+    }
+
     return {
       stream: object.body,
       mimeType: object.httpMetadata?.contentType || 'application/octet-stream',
       size: object.size,
+      contentRange,
     }
   }
 

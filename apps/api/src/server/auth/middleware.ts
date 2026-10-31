@@ -36,7 +36,7 @@ export function authContextMiddleware(): MiddlewareHandler<AppEnv> {
     // Se o Bearer token for uma API key (ex: ek_sec_ ou ek_anon_)
     const candidateApiKey =
       rawApiKey ||
-      (bearerToken && (bearerToken.startsWith('ek_') || bearerToken.startsWith('hb_'))
+      (bearerToken && bearerToken.startsWith('ek_')
         ? bearerToken
         : undefined)
 
@@ -58,9 +58,8 @@ export function authContextMiddleware(): MiddlewareHandler<AppEnv> {
       if (sessionData?.user) {
         c.set('user', sessionData.user)
         c.set('session', sessionData.session)
-        if (!c.get('role')) {
-          c.set('role', 'user')
-        }
+        // Usuário final autenticado no app prevalece sobre role 'anon' da chave pública
+        c.set('role', 'user')
       }
     }
 

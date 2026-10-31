@@ -77,10 +77,11 @@ export const RealtimeChannelInspector: React.FC<RealtimeChannelInspectorProps> =
         </CardHeader>
         <CardContent className="space-y-4 pt-4">
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+            <label htmlFor="broadcast-channel-input" className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
               Canal (Channel)
             </label>
             <input
+              id="broadcast-channel-input"
               type="text"
               value={channel}
               onChange={(e) => setChannel(e.target.value)}
@@ -93,10 +94,11 @@ export const RealtimeChannelInspector: React.FC<RealtimeChannelInspectorProps> =
           </div>
 
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+            <label htmlFor="broadcast-event-input" className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
               Nome do Evento (Event)
             </label>
             <input
+              id="broadcast-event-input"
               type="text"
               value={eventName}
               onChange={(e) => setEventName(e.target.value)}
@@ -105,10 +107,11 @@ export const RealtimeChannelInspector: React.FC<RealtimeChannelInspectorProps> =
           </div>
 
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+            <label htmlFor="broadcast-payload-input" className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
               Dados da Mensagem (Payload JSON)
             </label>
             <textarea
+              id="broadcast-payload-input"
               rows={5}
               value={payloadText}
               onChange={(e) => setPayloadText(e.target.value)}

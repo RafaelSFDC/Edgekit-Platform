@@ -27,6 +27,7 @@ describe('Edgekit Platform — Fundação, Segurança & Identidade Dupla (Fase 1
     try { await db.delete(users) } catch {}
     try { db.run(sql`DROP TABLE IF EXISTS articles`) } catch {}
     try { db.run(sql`DROP TABLE IF EXISTS tasks`) } catch {}
+    try { db.run(sql`DROP TABLE IF EXISTS batch_items`) } catch {}
   })
 
   it('GET /health deve retornar status ok e serviço Edgekit Platform', async () => {
@@ -923,6 +924,310 @@ describe('Edgekit Platform — Fundação, Segurança & Identidade Dupla (Fase 1
       const json: any = await res.json()
       expect(json.error.code).toBe('DYNAMIC_WORKERS_UNAVAILABLE')
       expect(json.error.howToEnable).toContain('ENABLE_FUNCTIONS=true')
+    })
+  })
+
+  describe('Durable Objects Hibernation, Multiplexação & Proteção CDC (Fase 7)', () => {
+    class MockDurableObjectState {
+      webSockets: any[] = []
+      tags = new Map<any, string[]>()
+
+      acceptWebSocket(ws: any, tags: string[] = []) {
+        this.webSockets.push(ws)
+        this.tags.set(ws, tags)
+      }
+
+      getWebSockets(_tag?: string) {
+        return this.webSockets
+      }
+    }
+
+    class MockWebSocket {
+      attachment: any = null
+      sentMessages: string[] = []
+
+      serializeAttachment(val: any) {
+        this.attachment = JSON.parse(JSON.stringify(val))
+      }
+
+      deserializeAttachment() {
+        return this.attachment ? JSON.parse(JSON.stringify(this.attachment)) : null
+      }
+
+      send(msg: string) {
+        this.sentMessages.push(msg)
+      }
+    }
+
+    it('DO preserva presença e canais via serializeAttachment/deserializeAttachment ao hibernar', async () => {
+      const { RealtimeDurableObject } = await import('../src/server/realtime/durable-object')
+      const mockState = new MockDurableObjectState()
+      const doInstance = new RealtimeDurableObject(mockState as any, {})
+
+      // Simula conexão WebSocket aceita no DO
+      const ws = new MockWebSocket()
+      const initialSession = {
+        userId: 'usr_alpha',
+        userName: 'Alpha Developer',
+        channels: ['channel-1'],
+        connectedAt: Date.now(),
+      }
+      ws.serializeAttachment(initialSession)
+      mockState.acceptWebSocket(ws, ['channel-1'])
+
+      // Verifica que o estado de presença é recuperado da hibernação via deserializeAttachment
+      const presenceRes = await doInstance.fetch(new Request('http://internal/presence?channel=channel-1'))
+      const presenceJson: any = await presenceRes.json()
+      expect(presenceJson.count).toBe(1)
+      expect(presenceJson.users[0].userId).toBe('usr_alpha')
+
+      // Assinatura dinâmica via mensagem WebSocket
+      await doInstance.webSocketMessage(
+        ws as any,
+        JSON.stringify({ action: 'subscribe', channel: 'channel-2' }),
+      )
+
+      const updatedSession = ws.deserializeAttachment()
+      expect(updatedSession.channels).toContain('channel-1')
+      expect(updatedSession.channels).toContain('channel-2')
+      expect(ws.sentMessages.some((m) => m.includes('"event":"subscribed"') && m.includes('channel-2'))).toBe(true)
+
+      // Cancelamento dinâmico de canal (unsubscribe)
+      await doInstance.webSocketMessage(
+        ws as any,
+        JSON.stringify({ action: 'unsubscribe', channel: 'channel-1' }),
+      )
+      const afterUnsubSession = ws.deserializeAttachment()
+      expect(afterUnsubSession.channels).not.toContain('channel-1')
+      expect(afterUnsubSession.channels).toContain('channel-2')
+      expect(ws.sentMessages.some((m) => m.includes('"event":"unsubscribed"') && m.includes('channel-1'))).toBe(true)
+    })
+
+    it('CDC Protection: DO rejeita broadcast direto de clientes para db:* e _ek_*', async () => {
+      const { RealtimeDurableObject } = await import('../src/server/realtime/durable-object')
+      const mockState = new MockDurableObjectState()
+      const doInstance = new RealtimeDurableObject(mockState as any, {})
+
+      const ws = new MockWebSocket()
+      ws.serializeAttachment({
+        userId: 'malicious_client',
+        userName: 'Attacker',
+        channels: ['db:users'],
+        connectedAt: Date.now(),
+      })
+      mockState.acceptWebSocket(ws, ['db:users'])
+
+      // Cliente tenta forjar broadcast de CDC de banco
+      await doInstance.webSocketMessage(
+        ws as any,
+        JSON.stringify({
+          channel: 'db:users',
+          event: 'INSERT',
+          data: { id: 'fake', email: 'forged@hack.com' },
+        }),
+      )
+
+      expect(
+        ws.sentMessages.some((m) => m.includes('FORBIDDEN_BROADCAST') && m.includes('db:*')),
+      ).toBe(true)
+
+      // Cliente tenta forjar broadcast em tabela de sistema _ek_*
+      await doInstance.webSocketMessage(
+        ws as any,
+        JSON.stringify({
+          channel: '_ek_admins',
+          event: 'UPDATE',
+          data: { role: 'owner' },
+        }),
+      )
+
+      expect(
+        ws.sentMessages.some((m) => m.includes('FORBIDDEN_BROADCAST')),
+      ).toBe(true)
+    })
+  })
+
+  describe('Mutações Atômicas Transacionais em Lote (POST /api/v1/db/batch)', () => {
+    it('Executa inserção, atualização e exclusão em lote de forma atômica', async () => {
+      const db = await getDb()
+      try { db.run(sql`DROP TABLE IF EXISTS batch_items`) } catch {}
+
+      // 1. Cria tabela batch_items com RLS público para o teste
+      const createRes = await app.request('/api/v1/admin/tables', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
+        body: JSON.stringify({
+          name: 'batch_items',
+          columns: [
+            { name: 'id', type: 'TEXT', primaryKey: true },
+            { name: 'name', type: 'TEXT' },
+            { name: 'quantity', type: 'INTEGER' },
+          ],
+        }),
+      })
+      expect(createRes.status).toBe(201)
+
+      await app.request('/api/v1/admin/tables/batch_items/policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
+        body: JSON.stringify({ rlsEnabled: false, selectRule: 'public', insertRule: 'public' }),
+      })
+
+      // 2. Executa POST /api/v1/db/batch com múltiplas operações
+      const batchRes = await app.request('/api/v1/db/batch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: serviceRoleKey,
+        },
+        body: JSON.stringify({
+          operations: [
+            { type: 'insert', table: 'batch_items', data: { id: 'item-1', name: 'Item A', quantity: 10 } },
+            { type: 'insert', table: 'batch_items', data: { id: 'item-2', name: 'Item B', quantity: 20 } },
+            { type: 'insert', table: 'batch_items', data: { id: 'item-3', name: 'Item C', quantity: 30 } },
+          ],
+        }),
+      })
+
+      const batchJson: any = await batchRes.json()
+      expect(batchRes.status).toBe(200)
+      expect(batchJson.success).toBe(true)
+      expect(batchJson.count).toBe(3)
+
+      // 3. Verifica que todos os 3 registros foram inseridos atomicamente
+      const checkRes = await app.request('/api/v1/db/batch_items', {
+        headers: { apikey: serviceRoleKey },
+      })
+      const checkJson: any = await checkRes.json()
+      expect(checkJson.data).toHaveLength(3)
+
+      // 4. Executa operação mista (update + delete) em lote
+      const mixedBatchRes = await app.request('/api/v1/db/batch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: serviceRoleKey,
+        },
+        body: JSON.stringify({
+          operations: [
+            { type: 'update', table: 'batch_items', id: 'item-1', data: { quantity: 99 } },
+            { type: 'delete', table: 'batch_items', id: 'item-2' },
+          ],
+        }),
+      })
+
+      expect(mixedBatchRes.status).toBe(200)
+
+      // 5. Verifica estado final
+      const finalRes = await app.request('/api/v1/db/batch_items', {
+        headers: { apikey: serviceRoleKey },
+      })
+      const finalJson: any = await finalRes.json()
+      expect(finalJson.data).toHaveLength(2)
+      const item1 = finalJson.data.find((i: any) => i.id === 'item-1')
+      expect(item1.quantity).toBe(99)
+      const item2 = finalJson.data.find((i: any) => i.id === 'item-2')
+      expect(item2).toBeUndefined()
+    })
+  })
+
+  describe('Dupla Identidade Estrita: App User (users) Bloqueado no Painel Administrativo', () => {
+    it('Usuário da aplicação com role="admin" em users recebe HTTP 403 em /api/v1/admin/*', async () => {
+      // 1. Cadastra usuário de app com papel 'admin' no Better Auth
+      const signUpRes = await app.request('/api/v1/auth/sign-up/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'App Admin Falso',
+          email: 'fakeadmin@appdomain.com',
+          password: 'senha-app-admin-123',
+        }),
+      })
+
+      expect(signUpRes.status).toBe(200)
+      const signUpJson: any = await signUpRes.json()
+      const appUserCookie = signUpRes.headers.get('set-cookie')?.split(';')[0] || ''
+
+      // Promove o usuário na tabela `users` do app para role='admin'
+      const db = await getDb()
+      await db.update(users).set({ role: 'admin' }).where(sql`id = ${signUpJson.user.id}`)
+
+      // 2. Tenta acessar rota restrita de admin (/api/v1/admin/stats) usando os cookies/sessão do app user
+      const adminAttempt = await app.request('/api/v1/admin/stats', {
+        headers: {
+          Cookie: appUserCookie,
+        },
+      })
+
+      // DEVE RETORNAR 403 FORBIDDEN! Barreira absoluta de dupla identidade
+      expect(adminAttempt.status).toBe(403)
+      const errJson: any = await adminAttempt.json()
+      expect(errJson.error.code).toBe('FORBIDDEN')
+      expect(errJson.error.message).toContain('Acesso restrito a administradores da plataforma')
+
+      // 3. Tenta acessar /api/v1/admin/members
+      const membersAttempt = await app.request('/api/v1/admin/members', {
+        headers: {
+          Cookie: appUserCookie,
+        },
+      })
+      expect(membersAttempt.status).toBe(403)
+    })
+  })
+
+  describe('Segurança Avançada: Policy Engine & SQL Runner Guardrail', () => {
+    it('Policy Engine rejeita custom_sql com caracteres de injeção (; , --, /*, PRAGMA)', () => {
+      const maliciousPolicy = {
+        id: 'p_malicious',
+        tableName: 'articles',
+        rlsEnabled: true,
+        selectRule: 'custom_sql',
+        insertRule: 'disabled',
+        updateRule: 'disabled',
+        deleteRule: 'disabled',
+        ownerColumn: 'user_id',
+        customRule: '1 = 1; DROP TABLE users; --',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }
+
+      const evalResult = evaluateTablePolicy(
+        'articles',
+        'select',
+        maliciousPolicy,
+        { role: 'user', user: { id: 'u1' } } as any,
+      )
+
+      expect(evalResult.allowed).toBe(false)
+      expect(evalResult.error).toContain('contém caracteres ou palavras-chave proibidas')
+    })
+
+    it('SQL Runner bloqueia mutações diretas em QUALQUER tabela do sistema (_ek_*)', async () => {
+      // Tenta mutação em _ek_settings
+      const res1 = await app.request('/api/v1/admin/sql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
+        body: JSON.stringify({ query: "UPDATE _ek_settings SET value = 'hacked'" }),
+      })
+      expect(res1.status).toBe(403)
+      const json1: any = await res1.json()
+      expect(json1.error.code).toBe('FORBIDDEN_MUTATION')
+
+      // Tenta mutação em _ek_table_policies
+      const res2 = await app.request('/api/v1/admin/sql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
+        body: JSON.stringify({ query: "DELETE FROM _ek_table_policies WHERE tableName = 'tasks'" }),
+      })
+      expect(res2.status).toBe(403)
+
+      // Tenta mutação em _ek_webhooks
+      const res3 = await app.request('/api/v1/admin/sql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
+        body: JSON.stringify({ query: 'DROP TABLE _ek_webhooks' }),
+      })
+      expect(res3.status).toBe(403)
     })
   })
 })

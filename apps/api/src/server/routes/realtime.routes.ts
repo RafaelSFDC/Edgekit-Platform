@@ -1,12 +1,12 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import type { AppEnv } from '../types'
 import { getBindings } from '../env'
 
 export const realtimeRoutes = new Hono<AppEnv>()
 
-// Conexão WebSocket para um canal Realtime
-realtimeRoutes.get('/:channel/ws', async (c) => {
-  const channel = c.req.param('channel')
+const REALTIME_HUB_NAME = 'realtime_hub'
+
+async function handleWebSocketUpgrade(c: Context<AppEnv>, defaultChannel?: string) {
   const bindings = await getBindings()
   const upgradeHeader = c.req.header('Upgrade')
 
@@ -18,14 +18,17 @@ realtimeRoutes.get('/:channel/ws', async (c) => {
   const incomingUrl = new URL(c.req.url)
   const target = new URL(c.req.url)
 
-  target.searchParams.set('channel', channel)
+  if (defaultChannel) {
+    target.searchParams.set('channel', defaultChannel)
+  }
+
   if (user) {
     target.searchParams.set('userId', user.id)
     target.searchParams.set('userName', user.name)
   } else if (!target.searchParams.has('userId')) {
     target.searchParams.set(
       'userId',
-      incomingUrl.searchParams.get('userId') || `anon_${Math.random().toString(36).slice(2, 7)}`,
+      incomingUrl.searchParams.get('userId') || `anon_${crypto.randomUUID().slice(0, 8)}`,
     )
     target.searchParams.set(
       'userName',
@@ -33,13 +36,13 @@ realtimeRoutes.get('/:channel/ws', async (c) => {
     )
   }
 
-  // 1. Usar Durable Object se disponível
+  // 1. Conecta ao Hub Realtime Durable Object multiplexado
   if (bindings.REALTIME) {
-    const stub = bindings.REALTIME.getByName(channel)
+    const stub = bindings.REALTIME.getByName(REALTIME_HUB_NAME)
     return (stub as any).fetch(new Request(target.toString(), c.req.raw as any)) as any
   }
 
-  // 2. Fallback de WebSocket direto no Worker (se rodando sem DO)
+  // 2. Fallback de WebSocket direto no Worker (se rodando sem DO localmente)
   const pair = new WebSocketPair()
   const [client, server] = [pair[0], pair[1]]
 
@@ -51,13 +54,25 @@ realtimeRoutes.get('/:channel/ws', async (c) => {
   })
 
   return new Response(null, { status: 101, webSocket: client } as any)
+}
+
+// Conexão WebSocket para o Hub Realtime (multiplexada para múltiplos canais)
+realtimeRoutes.get('/ws', async (c) => {
+  const channel = c.req.query('channel')
+  return handleWebSocketUpgrade(c, channel)
+})
+
+// Conexão WebSocket com canal inicial na URL
+realtimeRoutes.get('/:channel/ws', async (c) => {
+  const channel = c.req.param('channel')
+  return handleWebSocketUpgrade(c, channel)
 })
 
 // Disparar broadcast em um canal via HTTP
 realtimeRoutes.post('/:channel/broadcast', async (c) => {
   const channel = c.req.param('channel')
   const bindings = await getBindings()
-  const body = await c.req.json()
+  const body = await c.req.json().catch(() => ({}))
 
   const message = {
     id: crypto.randomUUID(),
@@ -68,7 +83,7 @@ realtimeRoutes.post('/:channel/broadcast', async (c) => {
   }
 
   if (bindings.REALTIME) {
-    const stub = bindings.REALTIME.getByName(channel)
+    const stub = bindings.REALTIME.getByName(REALTIME_HUB_NAME)
     const res = await (stub as any).fetch(
       new Request(`http://internal/broadcast`, {
         method: 'POST',
@@ -82,14 +97,16 @@ realtimeRoutes.post('/:channel/broadcast', async (c) => {
   return c.json({ success: true, message: 'Broadcast simulado (sem Durable Object)' })
 })
 
-// Obter usuários na sala
+// Obter usuários na sala / canal
 realtimeRoutes.get('/:channel/presence', async (c) => {
   const channel = c.req.param('channel')
   const bindings = await getBindings()
 
   if (bindings.REALTIME) {
-    const stub = bindings.REALTIME.getByName(channel)
-    const res = await (stub as any).fetch(new Request(`http://internal/presence`))
+    const stub = bindings.REALTIME.getByName(REALTIME_HUB_NAME)
+    const res = await (stub as any).fetch(
+      new Request(`http://internal/presence?channel=${encodeURIComponent(channel)}`),
+    )
     return res as any
   }
 

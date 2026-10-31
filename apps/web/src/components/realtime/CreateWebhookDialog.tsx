@@ -96,10 +96,11 @@ export const CreateWebhookDialog: React.FC<CreateWebhookDialogProps> = ({
 
         <form onSubmit={handleSubmit} className="space-y-4 py-2">
           <div>
-            <label className="block text-xs font-semibold text-foreground mb-1.5">
+            <label htmlFor="webhook-name-input" className="block text-xs font-semibold text-foreground mb-1.5">
               Nome do Webhook
             </label>
             <input
+              id="webhook-name-input"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -110,10 +111,11 @@ export const CreateWebhookDialog: React.FC<CreateWebhookDialogProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-foreground mb-1.5">
+            <label htmlFor="webhook-url-input" className="block text-xs font-semibold text-foreground mb-1.5">
               URL de Destino (Endpoint HTTPS)
             </label>
             <input
+              id="webhook-url-input"
               type="url"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
@@ -125,7 +127,7 @@ export const CreateWebhookDialog: React.FC<CreateWebhookDialogProps> = ({
 
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-semibold text-foreground">
+              <label htmlFor="webhook-secret-input" className="text-xs font-semibold text-foreground">
                 Segredo de Assinatura (HMAC Secret)
               </label>
               <button
@@ -138,6 +140,7 @@ export const CreateWebhookDialog: React.FC<CreateWebhookDialogProps> = ({
             </div>
             <div className="relative">
               <input
+                id="webhook-secret-input"
                 type="text"
                 value={secret}
                 onChange={(e) => setSecret(e.target.value)}
@@ -152,9 +155,9 @@ export const CreateWebhookDialog: React.FC<CreateWebhookDialogProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-foreground mb-1.5">
+            <span className="block text-xs font-semibold text-foreground mb-1.5">
               Eventos Subscritos
-            </label>
+            </span>
             <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"

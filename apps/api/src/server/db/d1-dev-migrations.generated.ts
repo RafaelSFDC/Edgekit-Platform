@@ -238,4 +238,35 @@ ALTER TABLE \`invitations\` ADD \`created_at\` integer;--> statement-breakpoint
 ALTER TABLE \`organizations\` ADD \`updated_at\` integer;--> statement-breakpoint
 ALTER TABLE \`users\` ADD \`two_factor_enabled\` integer DEFAULT false;`,
   },
+  {
+    tag: "0002_lumpy_terrax",
+    sql: `CREATE TABLE \`passkeys\` (
+	\`id\` text PRIMARY KEY NOT NULL,
+	\`name\` text,
+	\`public_key\` text NOT NULL,
+	\`user_id\` text NOT NULL,
+	\`credential_id\` text NOT NULL,
+	\`counter\` integer NOT NULL,
+	\`device_type\` text NOT NULL,
+	\`backed_up\` integer NOT NULL,
+	\`transports\` text,
+	\`created_at\` integer,
+	\`aaguid\` text,
+	FOREIGN KEY (\`user_id\`) REFERENCES \`users\`(\`id\`) ON UPDATE no action ON DELETE cascade
+);
+`,
+  },
+  {
+    tag: "0003_tearful_spitfire",
+    sql: `CREATE TABLE \`jwks\` (
+	\`id\` text PRIMARY KEY NOT NULL,
+	\`public_key\` text NOT NULL,
+	\`private_key\` text NOT NULL,
+	\`created_at\` integer NOT NULL,
+	\`expires_at\` integer,
+	\`alg\` text,
+	\`crv\` text
+);
+`,
+  },
 ]

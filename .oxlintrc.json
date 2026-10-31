@@ -41,6 +41,7 @@
     "react/incompatible-library": "off",
     "react/set-state-in-effect": "off",
     "jsx-a11y/media-has-caption": "off",
+    "jsx-a11y/control-has-associated-label": "off",
     "no-unused-vars": [
       "warn",
       {

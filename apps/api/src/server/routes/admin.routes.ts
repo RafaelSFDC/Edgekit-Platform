@@ -712,9 +712,8 @@ adminRoutes.post('/sql', requireAdmin(), async (c) => {
 
   if (isMutation) {
     const hitsCriticalTable =
-      upper.includes('_EK_ADMINS') ||
-      upper.includes('_EK_ADMIN_SESSIONS') ||
-      upper.includes('_EK_API_KEYS')
+      upper.includes('_EK_') ||
+      /\b_ek_[a-z0-9_]*\b/i.test(rawQuery)
 
     if (hitsCriticalTable) {
       return c.json(
@@ -722,7 +721,7 @@ adminRoutes.post('/sql', requireAdmin(), async (c) => {
           success: false,
           error: {
             code: 'FORBIDDEN_MUTATION',
-            message: 'Mutações diretas em tabelas de administradores e chaves da plataforma são bloqueadas pelo guardrail de segurança.',
+            message: 'Mutações diretas em tabelas do sistema (_ek_*) são bloqueadas pelo guardrail de segurança.',
           },
         },
         403,
