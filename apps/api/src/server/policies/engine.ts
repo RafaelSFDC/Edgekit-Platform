@@ -277,15 +277,30 @@ export function evaluateTablePolicy(
       }
     }
 
-    // Substitui variáveis parametrizadas @auth.id e @auth.role com sanitização estrita
-    const authId = (context.user?.id || '').replace(/['";\\]/g, '')
-    const authRole = (context.user?.role || context.role || 'anon').replace(/['";\\]/g, '')
+    // Compilação 100% parametrizada (Prepared Statements posicionais sem interpolação de strings)
+    const authId = context.user?.id || ''
+    const authRole = context.user?.role || context.role || 'anon'
+    const authOrgId =
+      context.session?.activeOrganizationId ||
+      context.user?.activeOrganizationId ||
+      context.user?.organizationId ||
+      ''
 
-    const processedCondition = sql`(${sql.raw(
-      rawExpression
-        .replace(/@auth\.id/g, `'${authId}'`)
-        .replace(/@auth\.role/g, `'${authRole}'`),
-    )})`
+    const parts = rawExpression.split(/(@auth\.id|@auth\.role|@auth\.org_id)/g)
+    const sqlParts: SQL[] = []
+    for (const part of parts) {
+      if (part === '@auth.id') {
+        sqlParts.push(sql`${authId}`)
+      } else if (part === '@auth.role') {
+        sqlParts.push(sql`${authRole}`)
+      } else if (part === '@auth.org_id') {
+        sqlParts.push(sql`${authOrgId}`)
+      } else if (part.length > 0) {
+        sqlParts.push(sql.raw(part))
+      }
+    }
+
+    const processedCondition = sql`(${sql.join(sqlParts, sql.raw(''))})`
 
     return {
       allowed: true,

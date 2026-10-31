@@ -46,50 +46,105 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
     headers['Authorization'] = `Bearer ${apiKey}`
   }
 
-  // 1. REALTIME CLIENT (Durable Objects WebSockets)
+  // 1. REALTIME CLIENT (Durable Objects WebSockets Multiplexed)
+  let sharedSocket: any = null
+  const activeChannels = new Map<string, Map<string, Array<(payload: any) => void>>>()
+  const pendingSubscriptions = new Set<string>()
+
+  function getOrConnectSocket(): any {
+    if (typeof (globalThis as any).WebSocket === 'undefined') {
+      return null
+    }
+    if (sharedSocket && (sharedSocket.readyState === 0 || sharedSocket.readyState === 1)) {
+      return sharedSocket
+    }
+
+    const wsProtocol = baseUrl.startsWith('https') ? 'wss' : 'ws'
+    const wsUrl = `${baseUrl.replace(/^https?/, wsProtocol)}/api/v1/realtime/ws?apikey=${encodeURIComponent(apiKey)}`
+
+    sharedSocket = new (globalThis as any).WebSocket(wsUrl)
+
+    sharedSocket.onopen = () => {
+      for (const channelName of activeChannels.keys()) {
+        sharedSocket.send(JSON.stringify({ action: 'subscribe', channel: channelName }))
+      }
+      for (const channelName of pendingSubscriptions) {
+        sharedSocket.send(JSON.stringify({ action: 'subscribe', channel: channelName }))
+      }
+      pendingSubscriptions.clear()
+    }
+
+    sharedSocket.onmessage = (msg: any) => {
+      try {
+        const raw = typeof msg.data === 'string' ? msg.data : new TextDecoder().decode(msg.data)
+        const data = JSON.parse(raw)
+        const channelName = data.channel
+        if (channelName && activeChannels.has(channelName)) {
+          const channelCallbacks = activeChannels.get(channelName)!
+          const eventCallbacks = channelCallbacks.get(data.event)
+          if (eventCallbacks) {
+            eventCallbacks.forEach((cb) => cb(data.payload ?? data))
+          }
+          const allCallbacks = channelCallbacks.get('*')
+          if (allCallbacks) {
+            allCallbacks.forEach((cb) => cb(data))
+          }
+        }
+      } catch {}
+    }
+
+    return sharedSocket
+  }
+
   const realtime = {
     channel(channelName: string): RealtimeChannel {
-      const callbacks = new Map<string, Array<(payload: any) => void>>()
-      let socket: any = null
+      let channelCallbacks = activeChannels.get(channelName)
+      if (!channelCallbacks) {
+        channelCallbacks = new Map()
+        activeChannels.set(channelName, channelCallbacks)
+      }
 
       const channelObj: RealtimeChannel = {
         on(event: string, callback: (payload: any) => void) {
-          const list = callbacks.get(event) || []
+          const list = channelCallbacks!.get(event) || []
           list.push(callback)
-          callbacks.set(event, list)
+          channelCallbacks!.set(event, list)
           return channelObj
         },
         subscribe() {
-          const wsProtocol = baseUrl.startsWith('https') ? 'wss' : 'ws'
-          const wsUrl = `${baseUrl.replace(/^https?/, wsProtocol)}/api/v1/realtime/${channelName}/ws?apikey=${apiKey}`
-          socket = new (globalThis as any).WebSocket(wsUrl)
-
-          socket.onmessage = (msg: any) => {
-            try {
-              const data = JSON.parse(msg.data)
-              const eventCallbacks = callbacks.get(data.event)
-              if (eventCallbacks) {
-                eventCallbacks.forEach((cb) => cb(data.payload))
-              }
-              const allCallbacks = callbacks.get('*')
-              if (allCallbacks) {
-                allCallbacks.forEach((cb) => cb(data))
-              }
-            } catch {}
+          const socket = getOrConnectSocket()
+          if (socket) {
+            if (socket.readyState === 1) {
+              socket.send(JSON.stringify({ action: 'subscribe', channel: channelName }))
+            } else {
+              pendingSubscriptions.add(channelName)
+            }
           }
           return channelObj
         },
         send(event: string, payload: any) {
+          const socket = getOrConnectSocket()
           if (socket && socket.readyState === 1) {
-            socket.send(JSON.stringify({ event, data: payload }))
+            socket.send(JSON.stringify({ action: 'broadcast', channel: channelName, event, data: payload }))
           }
         },
         unsubscribe() {
-          socket?.close()
+          activeChannels.delete(channelName)
+          pendingSubscriptions.delete(channelName)
+          if (sharedSocket && sharedSocket.readyState === 1) {
+            sharedSocket.send(JSON.stringify({ action: 'unsubscribe', channel: channelName }))
+          }
+          if (activeChannels.size === 0 && sharedSocket) {
+            try { sharedSocket.close() } catch {}
+            sharedSocket = null
+          }
         },
       }
 
       return channelObj
+    },
+    getSocket() {
+      return sharedSocket
     },
   }
 

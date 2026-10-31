@@ -25,9 +25,12 @@ import {
   createAdminSession,
   revokeAdminSession,
   ADMIN_COOKIE_NAME,
+  HOST_ADMIN_COOKIE_NAME,
 } from '../auth/admin-auth'
 import { createApiKey, ensureDefaultKeys } from '../auth/keys'
-import { getSecurityConfig, invalidateSecurityConfigCache } from '../auth/security'
+import { getSecurityConfig, invalidateSecurityConfigCache, isLocalhostOrigin } from '../auth/security'
+import { AdminSetupSchema, AdminLoginSchema, CreateApiKeySchema } from '../schemas'
+import { invalidateTableColumnsCache } from './db.routes'
 
 export const adminRoutes = new Hono<AppEnv>()
 
@@ -88,7 +91,22 @@ adminRoutes.post('/setup', async (c) => {
   }
 
   const body = await c.req.json().catch(() => ({}))
-  const { name, email, password, setupToken } = body
+  const parsed = AdminSetupSchema.safeParse(body)
+  if (!parsed.success) {
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'INVALID_INPUT',
+          message: parsed.error.errors[0]?.message || 'Dados inválidos para o setup.',
+        },
+      },
+      400,
+    )
+  }
+
+  const { name, email, password, setupToken } = parsed.data
+  const isProd = bindings.ENVIRONMENT === 'production'
 
   // Se SETUP_TOKEN estiver definido nas variáveis de ambiente, exige sua validação estrita
   if (bindings.SETUP_TOKEN && bindings.SETUP_TOKEN.trim()) {
@@ -104,19 +122,16 @@ adminRoutes.post('/setup', async (c) => {
         401,
       )
     }
-  }
-
-  if (!name || !email || !password) {
+  } else if (isProd) {
     return c.json(
-      { success: false, error: { message: 'Nome, e-mail e senha são obrigatórios.' } },
-      400,
-    )
-  }
-
-  if (password.length < 8) {
-    return c.json(
-      { success: false, error: { message: 'A senha do proprietário deve conter no mínimo 8 caracteres.' } },
-      400,
+      {
+        success: false,
+        error: {
+          code: 'SETUP_TOKEN_REQUIRED',
+          message: 'SETUP_TOKEN é obrigatório em ambiente de produção para provisionamento.',
+        },
+      },
+      403,
     )
   }
 
@@ -143,14 +158,26 @@ adminRoutes.post('/setup', async (c) => {
     }
     const { token: sessionToken } = await createAdminSession(db, adminId, sessionMeta)
 
-    const isLocalhost = c.req.url.includes('localhost') || c.req.url.includes('127.0.0.1')
+    const isLocalhost = isLocalhostOrigin(c.req.header('origin') || '') || c.req.url.includes('localhost') || c.req.url.includes('127.0.0.1')
+    const isHttps = c.req.url.startsWith('https://')
+
     setCookie(c, ADMIN_COOKIE_NAME, sessionToken, {
       httpOnly: true,
-      secure: !isLocalhost,
+      secure: !isLocalhost && isHttps,
       sameSite: 'Lax',
       path: '/',
       maxAge: 60 * 60 * 24 * 7, // 7 dias
     })
+
+    if (!isLocalhost && isHttps) {
+      setCookie(c, HOST_ADMIN_COOKIE_NAME, sessionToken, {
+        httpOnly: true,
+        secure: true,
+        sameSite: 'Lax',
+        path: '/',
+        maxAge: 60 * 60 * 24 * 7,
+      })
+    }
 
     // 3. Garante as chaves de API iniciais no banco
     await ensureDefaultKeys(db)
@@ -181,16 +208,21 @@ adminRoutes.post('/setup', async (c) => {
 // Login Administrativo do Painel (Email + Senha dos membros de _ek_admins)
 adminRoutes.post('/login', async (c) => {
   const body = await c.req.json().catch(() => ({}))
-  const email = (body.email || '').trim().toLowerCase()
-  const password = body.password || ''
-
-  if (!email || !password) {
+  const parsed = AdminLoginSchema.safeParse(body)
+  if (!parsed.success) {
     return c.json(
-      { success: false, error: { message: 'Informe e-mail e senha de administrador.' } },
+      {
+        success: false,
+        error: {
+          code: 'INVALID_INPUT',
+          message: parsed.error.errors[0]?.message || 'Informe e-mail e senha de administrador válidos.',
+        },
+      },
       400,
     )
   }
 
+  const { email, password } = parsed.data
   const db = await getDb()
   const admin = await db.select().from(ekAdmins).where(eq(ekAdmins.email, email)).get()
 
@@ -216,14 +248,26 @@ adminRoutes.post('/login', async (c) => {
   }
   const { token: sessionToken } = await createAdminSession(db, admin.id, sessionMeta)
 
-  const isLocalhost = c.req.url.includes('localhost') || c.req.url.includes('127.0.0.1')
+  const isLocalhost = isLocalhostOrigin(c.req.header('origin') || '') || c.req.url.includes('localhost') || c.req.url.includes('127.0.0.1')
+  const isHttps = c.req.url.startsWith('https://')
+
   setCookie(c, ADMIN_COOKIE_NAME, sessionToken, {
     httpOnly: true,
-    secure: !isLocalhost,
+    secure: !isLocalhost && isHttps,
     sameSite: 'Lax',
     path: '/',
     maxAge: 60 * 60 * 24 * 7, // 7 dias
   })
+
+  if (!isLocalhost && isHttps) {
+    setCookie(c, HOST_ADMIN_COOKIE_NAME, sessionToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Lax',
+      path: '/',
+      maxAge: 60 * 60 * 24 * 7,
+    })
+  }
 
   return c.json({
     success: true,
@@ -242,11 +286,12 @@ adminRoutes.post('/login', async (c) => {
 // Logout Administrativo
 adminRoutes.post('/logout', async (c) => {
   const db = await getDb()
-  const token = getCookie(c, ADMIN_COOKIE_NAME)
+  const token = getCookie(c, HOST_ADMIN_COOKIE_NAME) || getCookie(c, ADMIN_COOKIE_NAME)
   if (token) {
     await revokeAdminSession(db, token)
   }
   deleteCookie(c, ADMIN_COOKIE_NAME, { path: '/' })
+  deleteCookie(c, HOST_ADMIN_COOKIE_NAME, { path: '/' })
   return c.json({ success: true, message: 'Sessão administrativa encerrada com sucesso.' })
 })
 
@@ -465,11 +510,28 @@ adminRoutes.get('/keys', requireAdmin(), async (c) => {
 // Gerar nova chave de API (Retorna a chave completa apenas na criação)
 adminRoutes.post('/keys', requireAdmin(), async (c) => {
   const body = await c.req.json().catch(() => ({}))
-  const name = (body.name || 'Nova Chave').trim()
-  const type = body.type === 'service_role' ? 'service_role' : 'anon'
+  const parsed = CreateApiKeySchema.safeParse(body)
+  if (!parsed.success) {
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'INVALID_INPUT',
+          message: parsed.error.errors[0]?.message || 'Dados inválidos para geração de chave.',
+        },
+      },
+      400,
+    )
+  }
+
+  const { name, type, expiresAt } = parsed.data
   const db = await getDb()
 
-  const result = await createApiKey(db, { name, type })
+  const result = await createApiKey(db, {
+    name,
+    type,
+    expiresAt: expiresAt ? new Date(expiresAt) : null,
+  })
 
   return c.json(
     {
@@ -642,6 +704,8 @@ adminRoutes.post('/tables', requireAdmin(), async (c) => {
       updatedAt: now,
     })
 
+    invalidateTableColumnsCache(tableName)
+
     return c.json(
       {
         success: true,
@@ -710,6 +774,7 @@ adminRoutes.delete('/tables/:name', requireAdmin(), async (c) => {
   try {
     await db.run(sql.raw(`DROP TABLE \`${tableName}\``))
     await db.delete(ekTablePolicies).where(eq(ekTablePolicies.tableName, tableName)).catch(() => {})
+    invalidateTableColumnsCache(tableName)
     return c.json({ success: true, message: `Tabela "${tableName}" excluída com sucesso.` })
   } catch (err: any) {
     return c.json({ success: false, error: { message: err.message } }, 500)
@@ -744,6 +809,7 @@ adminRoutes.post('/tables/:name/columns', requireAdmin(), async (c) => {
   const db = await getDb()
   try {
     await db.run(sql.raw(alterSql))
+    invalidateTableColumnsCache(tableName)
     return c.json({ success: true, message: `Coluna "${colName}" adicionada à tabela "${tableName}".` })
   } catch (err: any) {
     return c.json({ success: false, error: { message: err.message } }, 500)

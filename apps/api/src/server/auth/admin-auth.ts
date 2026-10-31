@@ -111,6 +111,7 @@ export async function hashToken(token: string): Promise<string> {
 }
 
 export const ADMIN_COOKIE_NAME = 'edgekit_admin_session'
+export const HOST_ADMIN_COOKIE_NAME = '__Host-edgekit_admin_session'
 
 /**
  * Cria uma nova sessão administrativa para o membro da equipe

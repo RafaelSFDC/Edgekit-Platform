@@ -6,10 +6,9 @@ import { ekTablePolicies } from '../db/schema'
 import { getBindings } from '../env'
 import { evaluateTablePolicy, type PolicyEvaluationResult, type CrudAction } from '../policies/engine'
 import { dispatchWebhooks } from '../realtime/webhooks'
+import { BatchMutationsSchema, StructuredQuerySchema, SAFE_IDENTIFIER } from '../schemas'
 
 export const dbRoutes = new Hono<AppEnv>()
-
-const SAFE_IDENTIFIER = /^[a-zA-Z0-9_]+$/
 
 const SYSTEM_TABLES = new Set([
   'users',
@@ -29,6 +28,41 @@ const SYSTEM_TABLES = new Set([
   '__d1_migrations',
   '__honobase_migrations',
 ])
+
+const tableColumnsCache = new Map<string, { columns: Set<string>; cachedAt: number }>()
+const CACHE_TTL_MS = 60000
+
+export async function getTableColumns(db: AppDatabase, table: string): Promise<Set<string>> {
+  const cached = tableColumnsCache.get(table)
+  const now = Date.now()
+  if (cached && now - cached.cachedAt < CACHE_TTL_MS) {
+    return cached.columns
+  }
+
+  try {
+    const rawInfo: any[] = await db.all(sql.raw(`PRAGMA table_info(\`${table}\`)`))
+    const columns = new Set<string>()
+    if (Array.isArray(rawInfo)) {
+      for (const col of rawInfo) {
+        if (col && typeof col.name === 'string') {
+          columns.add(col.name.toLowerCase())
+        }
+      }
+    }
+    tableColumnsCache.set(table, { columns, cachedAt: now })
+    return columns
+  } catch {
+    return new Set<string>()
+  }
+}
+
+export function invalidateTableColumnsCache(table?: string) {
+  if (table) {
+    tableColumnsCache.delete(table)
+  } else {
+    tableColumnsCache.clear()
+  }
+}
 
 function sanitizeIdentifier(name: string): string {
   if (!SAFE_IDENTIFIER.test(name)) {
@@ -211,8 +245,11 @@ async function broadcastDatabaseEvent(
 // REST Data API: Consulta dinâmica com filtros avançados, Policy Engine e Expansão de Relações
 dbRoutes.get('/:table', async (c) => {
   const table = c.req.param('table')
+  sanitizeIdentifier(table)
   const runtime = await getDatabaseRuntime()
   const db = runtime.db
+
+  const validColumns = await getTableColumns(db, table)
 
   let policyResult: PolicyEvaluationResult
   try {
@@ -237,9 +274,28 @@ dbRoutes.get('/:table', async (c) => {
 
   let selectClause = '*'
   if (selectParam !== '*') {
-    const cols = selectParam.split(',').map((s) => s.trim())
+    const cols = selectParam.split(',').map((s) => s.trim()).filter(Boolean)
+    if (cols.length === 0) {
+      return c.json({ success: false, error: { code: 'INVALID_SELECT', message: 'Parâmetro select vazio.' } }, 400)
+    }
+    if (expandParam) {
+      const expandList = Array.isArray(expandParam)
+        ? expandParam
+        : String(expandParam).split(',').map((s) => s.trim()).filter(Boolean)
+      for (const exp of expandList) {
+        const fromCol = exp.split(':')[0]
+        if (SAFE_IDENTIFIER.test(fromCol) && !cols.includes(fromCol)) {
+          cols.push(fromCol)
+        }
+      }
+    }
     for (const col of cols) {
-      sanitizeIdentifier(col)
+      if (!SAFE_IDENTIFIER.test(col)) {
+        return c.json({ success: false, error: { code: 'INVALID_IDENTIFIER', message: `Coluna inválida: "${col}".` } }, 400)
+      }
+      if (validColumns.size > 0 && !validColumns.has(col.toLowerCase())) {
+        return c.json({ success: false, error: { code: 'INVALID_COLUMN', message: `A coluna "${col}" não existe na tabela "${table}".` } }, 400)
+      }
     }
     selectClause = cols.map((col) => `\`${col}\``).join(', ')
   }
@@ -254,12 +310,14 @@ dbRoutes.get('/:table', async (c) => {
   const reservedParams = new Set(['select', 'limit', 'offset', 'order', 'apikey', 'expand'])
 
   for (const [key, value] of Object.entries(query)) {
-    if (reservedParams.has(key) || !value) continue
+    if (reservedParams.has(key) || value === undefined || value === '') continue
 
-    try {
-      sanitizeIdentifier(key)
-    } catch {
-      continue
+    if (!SAFE_IDENTIFIER.test(key)) {
+      return c.json({ success: false, error: { code: 'INVALID_IDENTIFIER', message: `Identificador de coluna inválido: "${key}".` } }, 400)
+    }
+
+    if (validColumns.size > 0 && !validColumns.has(key.toLowerCase())) {
+      return c.json({ success: false, error: { code: 'INVALID_COLUMN', message: `A coluna "${key}" não existe na tabela "${table}".` } }, 400)
     }
 
     const colIdentifier = sql.raw(`\`${key}\``)
@@ -308,12 +366,17 @@ dbRoutes.get('/:table', async (c) => {
 
   if (orderParam) {
     const [orderCol, orderDir] = orderParam.split('.')
-    sanitizeIdentifier(orderCol)
+    if (!SAFE_IDENTIFIER.test(orderCol)) {
+      return c.json({ success: false, error: { code: 'INVALID_IDENTIFIER', message: `Identificador de coluna inválido na ordenação: "${orderCol}".` } }, 400)
+    }
+    if (validColumns.size > 0 && !validColumns.has(orderCol.toLowerCase())) {
+      return c.json({ success: false, error: { code: 'INVALID_COLUMN', message: `A coluna de ordenação "${orderCol}" não existe na tabela "${table}".` } }, 400)
+    }
     const dir = (orderDir || 'asc').toLowerCase() === 'desc' ? 'DESC' : 'ASC'
     queryChunks.push(sql.raw(` ORDER BY \`${orderCol}\` ${dir}`))
   }
 
-  queryChunks.push(sql.raw(` LIMIT ${limitParam} OFFSET ${offsetParam}`))
+  queryChunks.push(sql` LIMIT ${limitParam} OFFSET ${offsetParam}`)
 
   try {
     const finalSql = sql.join(queryChunks, sql.raw(''))
@@ -354,8 +417,11 @@ dbRoutes.get('/:table', async (c) => {
 // Endpoint Declarativo Estruturado de Consulta (Zero-Raw SQL no Frontend)
 dbRoutes.post('/:table/query', async (c) => {
   const table = c.req.param('table')
+  sanitizeIdentifier(table)
   const runtime = await getDatabaseRuntime()
   const db = runtime.db
+
+  const validColumns = await getTableColumns(db, table)
 
   let policyResult: PolicyEvaluationResult
   try {
@@ -371,18 +437,54 @@ dbRoutes.post('/:table/query', async (c) => {
     )
   }
 
-  const body = await c.req.json().catch(() => ({}))
-  const selectArr: string[] = Array.isArray(body.select) ? body.select : (typeof body.select === 'string' && body.select !== '*' ? body.select.split(',').map((s: string) => s.trim()) : [])
-  const whereArr: Array<{ field: string; op: string; value: any }> = Array.isArray(body.where) ? body.where : []
+  const rawBody = await c.req.json().catch(() => ({}))
+  const parsed = StructuredQuerySchema.safeParse(rawBody)
+  if (!parsed.success) {
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'INVALID_QUERY_SPEC',
+          message: parsed.error.errors[0]?.message || 'Estrutura de consulta declarativa inválida.',
+        },
+      },
+      400,
+    )
+  }
+
+  const body = parsed.data
+  const rawSelect = body.select || body.columns
+  const selectArr: string[] = Array.isArray(rawSelect)
+    ? rawSelect
+    : (typeof rawSelect === 'string' && rawSelect !== '*'
+      ? rawSelect.split(',').map((s) => s.trim()).filter(Boolean)
+      : [])
+  const whereArr = body.where || []
   const expandParam = body.expand
   const limitParam = Math.min(Math.max(Number(body.limit) || 50, 1), 500)
   const offsetParam = Math.max(Number(body.offset) || 0, 0)
-  const orderByArr: Array<{ field: string; direction?: string }> = Array.isArray(body.orderBy) ? body.orderBy : []
+  const orderByArr = body.orderBy || []
 
   let selectClause = '*'
   if (selectArr.length > 0) {
+    if (expandParam) {
+      const expandList = Array.isArray(expandParam)
+        ? expandParam
+        : (typeof expandParam === 'string' ? expandParam.split(',').map((s) => s.trim()).filter(Boolean) : [])
+      for (const exp of expandList) {
+        const fromCol = exp.split(':')[0]
+        if (SAFE_IDENTIFIER.test(fromCol) && !selectArr.includes(fromCol)) {
+          selectArr.push(fromCol)
+        }
+      }
+    }
     for (const col of selectArr) {
-      sanitizeIdentifier(col)
+      if (!SAFE_IDENTIFIER.test(col)) {
+        return c.json({ success: false, error: { code: 'INVALID_IDENTIFIER', message: `Coluna inválida: "${col}".` } }, 400)
+      }
+      if (validColumns.size > 0 && !validColumns.has(col.toLowerCase())) {
+        return c.json({ success: false, error: { code: 'INVALID_COLUMN', message: `A coluna "${col}" não existe na tabela "${table}".` } }, 400)
+      }
     }
     selectClause = selectArr.map((col) => `\`${col}\``).join(', ')
   }
@@ -393,7 +495,13 @@ dbRoutes.post('/:table/query', async (c) => {
   }
 
   for (const item of whereArr) {
-    if (!item.field || !SAFE_IDENTIFIER.test(item.field)) continue
+    if (!item.field || !SAFE_IDENTIFIER.test(item.field)) {
+      return c.json({ success: false, error: { code: 'INVALID_IDENTIFIER', message: `Campo de filtro inválido: "${item.field}".` } }, 400)
+    }
+    if (validColumns.size > 0 && !validColumns.has(item.field.toLowerCase())) {
+      return c.json({ success: false, error: { code: 'INVALID_COLUMN', message: `A coluna de filtro "${item.field}" não existe na tabela "${table}".` } }, 400)
+    }
+
     const colIdentifier = sql.raw(`\`${item.field}\``)
     const op = (item.op || 'eq').toLowerCase()
     const val = item.value
@@ -456,15 +564,22 @@ dbRoutes.post('/:table/query', async (c) => {
   }
 
   if (orderByArr.length > 0) {
+    for (const o of orderByArr) {
+      if (!SAFE_IDENTIFIER.test(o.field)) {
+        return c.json({ success: false, error: { code: 'INVALID_IDENTIFIER', message: `Campo de ordenação inválido: "${o.field}".` } }, 400)
+      }
+      if (validColumns.size > 0 && !validColumns.has(o.field.toLowerCase())) {
+        return c.json({ success: false, error: { code: 'INVALID_COLUMN', message: `A coluna de ordenação "${o.field}" não existe na tabela "${table}".` } }, 400)
+      }
+    }
     const orderSqlParts = orderByArr.map((o) => {
-      sanitizeIdentifier(o.field)
       const dir = (o.direction || 'asc').toLowerCase() === 'desc' ? 'DESC' : 'ASC'
       return sql.raw(`\`${o.field}\` ${dir}`)
     })
     queryChunks.push(sql.raw(' ORDER BY '), sql.join(orderSqlParts, sql.raw(', ')))
   }
 
-  queryChunks.push(sql.raw(` LIMIT ${limitParam} OFFSET ${offsetParam}`))
+  queryChunks.push(sql` LIMIT ${limitParam} OFFSET ${offsetParam}`)
 
   try {
     const finalSql = sql.join(queryChunks, sql.raw(''))
@@ -573,20 +688,25 @@ dbRoutes.post('/batch', async (c) => {
   const runtime = await getDatabaseRuntime()
   const db = runtime.db
 
-  const body = await c.req.json().catch(() => ({}))
-  const operations: Array<{
-    type: 'insert' | 'update' | 'delete'
-    table: string
-    id?: string
-    data?: any
-  }> = body.operations || body.mutations || []
+  const rawBody = await c.req.json().catch(() => ({}))
+  const parsed = BatchMutationsSchema.safeParse(
+    rawBody.operations || rawBody.mutations ? { operations: rawBody.operations || rawBody.mutations } : rawBody,
+  )
 
-  if (!Array.isArray(operations) || operations.length === 0) {
+  if (!parsed.success) {
     return c.json(
-      { success: false, error: { message: 'Informe a lista de operações no campo "operations".' } },
+      {
+        success: false,
+        error: {
+          code: 'INVALID_BATCH_INPUT',
+          message: parsed.error.errors[0]?.message || 'Informe a lista de operações no campo "operations".',
+        },
+      },
       400,
     )
   }
+
+  const operations = parsed.data.operations
 
   try {
     const queries: SQL[] = []
@@ -597,6 +717,7 @@ dbRoutes.post('/batch', async (c) => {
       const action = op.type.toLowerCase() as CrudAction
       const access = await resolveTableAccessWithEngine(db, table, c, action)
       const isPlatformAdmin = Boolean(access.bypass)
+      const validCols = await getTableColumns(db, table)
 
       if (action === 'insert') {
         const record = { ...op.data }
@@ -609,6 +730,9 @@ dbRoutes.post('/batch', async (c) => {
         const keys = Object.keys(record)
         for (const k of keys) {
           sanitizeIdentifier(k)
+          if (validCols.size > 0 && !validCols.has(k.toLowerCase())) {
+            return c.json({ success: false, error: { code: 'INVALID_COLUMN', message: `Coluna "${k}" não existe na tabela "${table}".` } }, 400)
+          }
         }
         const columnsSql = sql.raw(keys.map((k) => `\`${k}\``).join(', '))
         const valuesSql = sql.join(
@@ -641,6 +765,9 @@ dbRoutes.post('/batch', async (c) => {
         const keys = Object.keys(data)
         for (const k of keys) {
           sanitizeIdentifier(k)
+          if (validCols.size > 0 && !validCols.has(k.toLowerCase())) {
+            return c.json({ success: false, error: { code: 'INVALID_COLUMN', message: `Coluna "${k}" não existe na tabela "${table}".` } }, 400)
+          }
         }
         const setClauses = sql.join(
           keys.map((k) => sql`${sql.raw(`\`${k}\``)} = ${data[k]}`),
@@ -699,8 +826,10 @@ dbRoutes.post('/batch', async (c) => {
 // Inserir registro(s) com Policy Engine, mutação atômica em lote e CDC Broadcast
 dbRoutes.post('/:table', async (c) => {
   const table = c.req.param('table')
+  sanitizeIdentifier(table)
   const runtime = await getDatabaseRuntime()
   const db = runtime.db
+  const validCols = await getTableColumns(db, table)
 
   try {
     const access = await resolveTableAccessWithEngine(db, table, c, 'insert')
@@ -708,7 +837,7 @@ dbRoutes.post('/:table', async (c) => {
     const body = await c.req.json().catch(() => ({}))
     const records = Array.isArray(body) ? body : [body]
 
-    if (records.length === 0) {
+    if (records.length === 0 || !records[0] || typeof records[0] !== 'object') {
       return c.json({ success: false, error: { message: 'Nenhum registro para inserir.' } }, 400)
     }
 
@@ -727,6 +856,9 @@ dbRoutes.post('/:table', async (c) => {
       const keys = Object.keys(row)
       for (const k of keys) {
         sanitizeIdentifier(k)
+        if (validCols.size > 0 && !validCols.has(k.toLowerCase())) {
+          return c.json({ success: false, error: { code: 'INVALID_COLUMN', message: `Coluna "${k}" não existe na tabela "${table}".` } }, 400)
+        }
       }
 
       const columnsSql = sql.raw(keys.map((k) => `\`${k}\``).join(', '))
@@ -767,9 +899,11 @@ dbRoutes.post('/:table', async (c) => {
 // Atualizar registro por ID com Anti-Hijack Guardrail, Policy Engine e CDC Broadcast
 dbRoutes.patch('/:table/:id', async (c) => {
   const table = c.req.param('table')
+  sanitizeIdentifier(table)
   const id = c.req.param('id')
   const runtime = await getDatabaseRuntime()
   const db = runtime.db
+  const validCols = await getTableColumns(db, table)
 
   try {
     const access = await resolveTableAccessWithEngine(db, table, c, 'update')
@@ -797,6 +931,9 @@ dbRoutes.patch('/:table/:id', async (c) => {
 
     for (const k of keys) {
       sanitizeIdentifier(k)
+      if (validCols.size > 0 && !validCols.has(k.toLowerCase())) {
+        return c.json({ success: false, error: { code: 'INVALID_COLUMN', message: `Coluna "${k}" não existe na tabela "${table}".` } }, 400)
+      }
     }
 
     const setClauses = sql.join(

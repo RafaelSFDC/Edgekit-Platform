@@ -12,6 +12,13 @@ export interface SecurityConfig {
 let cachedSecurityConfig: SecurityConfig | null = null
 let cacheExpiresAt = 0
 
+const LOCAL_ORIGIN_REGEX = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/i
+
+export function isLocalhostOrigin(origin: string): boolean {
+  if (!origin) return false
+  return LOCAL_ORIGIN_REGEX.test(origin.trim())
+}
+
 export function getClientIp(c: Context<AppEnv>): string {
   const cfIp = c.req.header('cf-connecting-ip')
   if (cfIp) return cfIp.trim()
@@ -106,10 +113,7 @@ export async function resolveCorsOrigin(origin: string, c: Context<AppEnv>): Pro
   const clientIp = getClientIp(c)
 
   // Proteção de localhost: se a origem declarada é localhost/127.0.0.1
-  const isLocalOrigin =
-    origin.includes('localhost') ||
-    origin.includes('127.0.0.1') ||
-    origin.includes('0.0.0.0')
+  const isLocalOrigin = isLocalhostOrigin(origin)
 
   if (isLocalOrigin && config.blockExternalLocalhost) {
     // Se a requisição chega de uma máquina remota (não loopback), bloqueia

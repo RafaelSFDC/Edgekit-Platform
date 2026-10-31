@@ -4,16 +4,18 @@ import type { AppEnv } from '../types'
 import { getDatabaseRuntime } from '../db'
 import { getSessionFromHeaders } from './index'
 import { validateApiKey } from './keys'
-import { ADMIN_COOKIE_NAME, validateAdminSession } from './admin-auth'
-import { getSecurityConfig } from './security'
+import { ADMIN_COOKIE_NAME, HOST_ADMIN_COOKIE_NAME, validateAdminSession } from './admin-auth'
+import { getSecurityConfig, isLocalhostOrigin } from './security'
 
 export function authContextMiddleware(): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const runtime = await getDatabaseRuntime()
     const db = runtime.db
 
-    // 1. Checa Sessão Administrativa do Painel (Cookie HttpOnly edgekit_admin_session)
-    const adminSessionToken = getCookie(c, ADMIN_COOKIE_NAME)
+    // 1. Checa Sessão Administrativa do Painel (Cookie HttpOnly edgekit_admin_session ou __Host-edgekit_admin_session)
+    const adminSessionToken =
+      getCookie(c, HOST_ADMIN_COOKIE_NAME) ||
+      getCookie(c, ADMIN_COOKIE_NAME)
     if (adminSessionToken) {
       const admin = await validateAdminSession(db, adminSessionToken)
       if (admin) {
@@ -48,9 +50,7 @@ export function authContextMiddleware(): MiddlewareHandler<AppEnv> {
         if (validatedKey.type === 'service_role') {
           const originHeader = c.req.header('origin')
           if (originHeader) {
-            const isLocalOrigin =
-              originHeader.includes('localhost') ||
-              originHeader.includes('127.0.0.1')
+            const isLocalOrigin = isLocalhostOrigin(originHeader)
             const config = await getSecurityConfig()
             const isExplicitlyAllowed =
               Boolean(config.allowedOrigins &&

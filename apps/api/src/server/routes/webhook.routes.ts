@@ -6,6 +6,7 @@ import { getDb } from '../db'
 import { ekWebhooks } from '../db/schema'
 import { requireAdmin } from '../auth/middleware'
 import { computeWebhookSignature, type WebhookPayload } from '../realtime/webhooks'
+import { CreateWebhookSchema, UpdateWebhookSchema } from '../schemas'
 
 export const webhookRoutes = new Hono<AppEnv>()
 
@@ -22,24 +23,21 @@ webhookRoutes.get('/', async (c) => {
 // 2. Criar novo webhook
 webhookRoutes.post('/', async (c) => {
   const body = await c.req.json().catch(() => ({}))
-  const { name, url, events, secret, enabled } = body
-
-  if (!name || !url) {
+  const parsed = CreateWebhookSchema.safeParse(body)
+  if (!parsed.success) {
     return c.json(
-      { success: false, error: { message: 'Campos "name" e "url" são obrigatórios.' } },
+      {
+        success: false,
+        error: {
+          code: 'INVALID_INPUT',
+          message: parsed.error.errors[0]?.message || 'Dados inválidos para criação do webhook.',
+        },
+      },
       400,
     )
   }
 
-  try {
-    new URL(url)
-  } catch {
-    return c.json(
-      { success: false, error: { message: 'URL fornecida é inválida.' } },
-      400,
-    )
-  }
-
+  const { name, url, events, secret, enabled } = parsed.data
   const db = await getDb()
   const now = new Date()
   const id = nanoid()
@@ -47,11 +45,11 @@ webhookRoutes.post('/', async (c) => {
 
   const newWebhook = {
     id,
-    name: String(name).trim(),
-    url: String(url).trim(),
+    name,
+    url,
     events: JSON.stringify(events && events.length > 0 ? events : ['*']),
     secret: generatedSecret,
-    enabled: enabled !== undefined ? Boolean(enabled) : true,
+    enabled: enabled !== undefined ? enabled : true,
     createdAt: now,
     updatedAt: now,
   }
@@ -77,27 +75,33 @@ webhookRoutes.get('/:id', async (c) => {
 webhookRoutes.put('/:id', async (c) => {
   const id = c.req.param('id')
   const body = await c.req.json().catch(() => ({}))
-  const db = await getDb()
+  const parsed = UpdateWebhookSchema.safeParse(body)
+  if (!parsed.success) {
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'INVALID_INPUT',
+          message: parsed.error.errors[0]?.message || 'Dados inválidos para atualização do webhook.',
+        },
+      },
+      400,
+    )
+  }
 
+  const db = await getDb()
   const existing = await db.select().from(ekWebhooks).where(eq(ekWebhooks.id, id)).get()
   if (!existing) {
     return c.json({ success: false, error: { message: 'Webhook não encontrado.' } }, 404)
   }
 
-  if (body.url) {
-    try {
-      new URL(body.url)
-    } catch {
-      return c.json({ success: false, error: { message: 'URL fornecida é inválida.' } }, 400)
-    }
-  }
-
+  const data = parsed.data
   const updated = {
-    name: body.name ? String(body.name).trim() : existing.name,
-    url: body.url ? String(body.url).trim() : existing.url,
-    events: body.events ? JSON.stringify(body.events) : existing.events,
-    secret: body.secret !== undefined ? body.secret : existing.secret,
-    enabled: body.enabled !== undefined ? Boolean(body.enabled) : existing.enabled,
+    name: data.name ?? existing.name,
+    url: data.url ?? existing.url,
+    events: data.events ? JSON.stringify(data.events) : existing.events,
+    secret: data.secret !== undefined ? data.secret : existing.secret,
+    enabled: data.enabled !== undefined ? data.enabled : existing.enabled,
     updatedAt: new Date(),
   }
 

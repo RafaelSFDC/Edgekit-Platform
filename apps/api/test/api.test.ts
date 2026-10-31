@@ -1487,4 +1487,224 @@ describe('Edgekit Platform — Fundação, Segurança & Identidade Dupla (Fase 1
       expect(queryRes.data?.[0].user?.name).toBe('Security Test User')
     })
   })
+
+  describe('Constituição Arquitetural: Blindagem contra SQL Injection, Zero-Trust Origin & Multiplexação Realtime', () => {
+    it('SQL Injection Defense: Rejeita parâmetros de coluna com caracteres fora da whitelist (HTTP 400)', async () => {
+      // 1. Identificador de coluna malicioso no filtro
+      const badFilterRes = await app.request('/api/v1/db/articles?id%27;DROP%20TABLE=1', {
+        headers: { apikey: serviceRoleKey },
+      })
+      expect(badFilterRes.status).toBe(400)
+      const badFilterJson: any = await badFilterRes.json()
+      expect(badFilterJson.error.code).toBe('INVALID_IDENTIFIER')
+
+      // 2. Coluna não existente no schema
+      const nonExistentRes = await app.request('/api/v1/db/articles?coluna_inexistente=123', {
+        headers: { apikey: serviceRoleKey },
+      })
+      expect(nonExistentRes.status).toBe(400)
+      const nonExistentJson: any = await nonExistentRes.json()
+      expect(nonExistentJson.error.code).toBe('INVALID_COLUMN')
+
+      // 3. Coluna não existente no select
+      const badSelectRes = await app.request('/api/v1/db/articles?select=id,coluna_fantasma', {
+        headers: { apikey: serviceRoleKey },
+      })
+      expect(badSelectRes.status).toBe(400)
+      const badSelectJson: any = await badSelectRes.json()
+      expect(badSelectJson.error.code).toBe('INVALID_COLUMN')
+
+      // 4. Caractere malicioso no select
+      const injectionSelectRes = await app.request('/api/v1/db/articles?select=id,content%27;DROP', {
+        headers: { apikey: serviceRoleKey },
+      })
+      expect(injectionSelectRes.status).toBe(400)
+      const injectionSelectJson: any = await injectionSelectRes.json()
+      expect(injectionSelectJson.error.code).toBe('INVALID_IDENTIFIER')
+
+      // 5. Coluna não existente na ordenação
+      const badOrderRes = await app.request('/api/v1/db/articles?order=coluna_inexistente.desc', {
+        headers: { apikey: serviceRoleKey },
+      })
+      expect(badOrderRes.status).toBe(400)
+      const badOrderJson: any = await badOrderRes.json()
+      expect(badOrderJson.error.code).toBe('INVALID_COLUMN')
+
+      // 6. Caractere malicioso na ordenação
+      const injectionOrderRes = await app.request('/api/v1/db/articles?order=id;DROP%20TABLE.desc', {
+        headers: { apikey: serviceRoleKey },
+      })
+      expect(injectionOrderRes.status).toBe(400)
+      const injectionOrderJson: any = await injectionOrderRes.json()
+      expect(injectionOrderJson.error.code).toBe('INVALID_IDENTIFIER')
+    })
+
+    it('SQL Injection Defense: Prepared Statement trata valores como parâmetros puros e bloqueia bypass (ex: OR 1=1)', async () => {
+      // Injeta deliberadamente payload clássico no valor do filtro
+      const res = await app.request('/api/v1/db/articles?title=eq:val%27%20OR%201=1%20--', {
+        headers: { apikey: serviceRoleKey },
+      })
+
+      expect(res.status).toBe(200)
+      const json: any = await res.json()
+      // A consulta deve ser executada com prepared statement vinculando o valor exato, sem vazar registros
+      expect(json.success).toBe(true)
+      expect(json.data.length).toBe(0)
+    })
+
+    it('Zero-Trust Origin Defense: Bloqueia service_role com subdomínios forjados de localhost (attacker-localhost.com)', async () => {
+      // Subdomínio malicioso tentando simular localhost
+      const attackerRes = await app.request('/api/v1/admin/stats', {
+        headers: {
+          apikey: serviceRoleKey,
+          Origin: 'https://attacker-localhost.com',
+        },
+      })
+      expect(attackerRes.status).toBe(403)
+      const attackerJson: any = await attackerRes.json()
+      expect(attackerJson.error.code).toBe('FORBIDDEN_SERVICE_ROLE_BROWSER')
+
+      // Outro ataque comum: localhost como path
+      const pathAttackerRes = await app.request('/api/v1/admin/stats', {
+        headers: {
+          apikey: serviceRoleKey,
+          Origin: 'https://evil.org/localhost',
+        },
+      })
+      expect(pathAttackerRes.status).toBe(403)
+
+      // Origem legítima local em porta padrão deve ser autorizada
+      const validLocalRes = await app.request('/api/v1/admin/stats', {
+        headers: {
+          apikey: serviceRoleKey,
+          Origin: 'http://localhost:3000',
+        },
+      })
+      expect(validLocalRes.status).toBe(200)
+
+      const validIpRes = await app.request('/api/v1/admin/stats', {
+        headers: {
+          apikey: serviceRoleKey,
+          Origin: 'http://127.0.0.1:5173',
+        },
+      })
+      expect(validIpRes.status).toBe(200)
+    })
+
+    it('Zero-Trust Header Defense: Usuário não autenticado forjando headers de admin é barrado com 403', async () => {
+      const spoofRes = await app.request('/api/v1/admin/stats', {
+        headers: {
+          'x-admin': 'true',
+          'role': 'owner',
+          'x-role': 'admin',
+        },
+      })
+      expect(spoofRes.status).toBe(403)
+      const json: any = await spoofRes.json()
+      expect(json.error.code).toBe('FORBIDDEN')
+    })
+
+    it('Validação Estrita de Schemas (Zod): Rejeita payloads malformados com HTTP 400', async () => {
+      // 1. Login com e-mail inválido
+      const badLoginRes = await app.request('/api/v1/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'formato-invalido', password: '123' }),
+      })
+      expect(badLoginRes.status).toBe(400)
+      const badLoginJson: any = await badLoginRes.json()
+      expect(badLoginJson.error.code).toBe('INVALID_INPUT')
+
+      // 2. Chave com tipo inexistente
+      const badKeyRes = await app.request('/api/v1/admin/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: serviceRoleKey },
+        body: JSON.stringify({ name: 'Chave Invalida', type: 'superuser' }),
+      })
+      expect(badKeyRes.status).toBe(400)
+      const badKeyJson: any = await badKeyRes.json()
+      expect(badKeyJson.error.code).toBe('INVALID_INPUT')
+
+      // 3. Webhook com URL inválida
+      const badWebhookRes = await app.request('/api/v1/webhooks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: serviceRoleKey },
+        body: JSON.stringify({ name: 'Meu Webhook', url: 'not-a-valid-url' }),
+      })
+      expect(badWebhookRes.status).toBe(400)
+      const badWebhookJson: any = await badWebhookRes.json()
+      expect(badWebhookJson.error.code).toBe('INVALID_INPUT')
+    })
+
+    it('Realtime Multiplexing: Cliente SDK mantém uma única conexão WebSocket compartilhada para múltiplos canais', () => {
+      // Mock de WebSocket para validação da multiplexação no ambiente de teste
+      let connectionCount = 0
+      const mockWsInstances: any[] = []
+
+      class MockWebSocket {
+        readyState = 1
+        url: string
+        sentMessages: string[] = []
+        onopen: any
+        onmessage: any
+        onclose: any
+
+        constructor(url: string) {
+          this.url = url
+          connectionCount++
+          mockWsInstances.push(this)
+          setTimeout(() => this.onopen?.(), 0)
+        }
+
+        send(msg: string) {
+          this.sentMessages.push(msg)
+        }
+
+        close() {
+          this.readyState = 3
+          this.onclose?.()
+        }
+      }
+
+      const originalWs = (globalThis as any).WebSocket
+      ;(globalThis as any).WebSocket = MockWebSocket
+
+      try {
+        const client = createEdgekitClient({
+          url: 'http://localhost:3000',
+          anonKey: 'ek_anon_test_multiplex',
+        })
+
+        // Subscrição a 3 canais distintos
+        const ch1 = client.realtime.channel('chat-room-1').subscribe()
+        const ch2 = client.realtime.channel('chat-room-2').subscribe()
+        const ch3 = client.realtime.channel('chat-room-3').subscribe()
+
+        // Garante que APENAS UMA conexão WebSocket foi criada para os 3 canais
+        expect(connectionCount).toBe(1)
+        expect(mockWsInstances.length).toBe(1)
+        expect(client.realtime.getSocket()).toBe(mockWsInstances[0])
+
+        // Mensagens enviadas devem multiplexar os canais
+        ch1.send('msg', { text: 'Olá Sala 1' })
+        ch2.send('msg', { text: 'Olá Sala 2' })
+
+        const sent = mockWsInstances[0].sentMessages
+        expect(sent.some((m: string) => m.includes('chat-room-1'))).toBe(true)
+        expect(sent.some((m: string) => m.includes('chat-room-2'))).toBe(true)
+
+        // Cancelar subscrição de 2 canais deve manter o socket aberto
+        ch1.unsubscribe()
+        ch2.unsubscribe()
+        expect(mockWsInstances[0].readyState).toBe(1)
+
+        // Cancelar o último canal fecha a conexão compartilhada
+        ch3.unsubscribe()
+        expect(mockWsInstances[0].readyState).toBe(3)
+        expect(client.realtime.getSocket()).toBeNull()
+      } finally {
+        ;(globalThis as any).WebSocket = originalWs
+      }
+    })
+  })
 })
