@@ -1,12 +1,28 @@
 import { describe, it, expect, beforeAll } from 'vitest'
-import { sql } from 'drizzle-orm'
+import { sql, eq } from 'drizzle-orm'
 import { app } from '../src/server/app'
 import { getDb } from '../src/server/db'
-import { ekAdmins, ekApiKeys, ekTablePolicies, ekStorageBuckets, ekStorageObjects, ekWebhooks, users, organizations } from '../src/server/db/schema'
+import {
+  ekAdmins,
+  ekAdminSessions,
+  ekApiKeys,
+  ekTablePolicies,
+  ekStorageBuckets,
+  ekStorageObjects,
+  ekWebhooks,
+  users,
+  sessions,
+  accounts,
+  members,
+  invitations,
+  organizations,
+  jwks,
+} from '../src/server/db/schema'
 import { createEdgekitClient } from '../../../packages/client/src/index'
 import { ADMIN_COOKIE_NAME } from '../src/server/auth/admin-auth'
 import { evaluateTablePolicy } from '../src/server/policies/engine'
 import { computeWebhookSignature, verifyWebhookSignature } from '../src/server/realtime/webhooks'
+import { getBindings } from '../src/server/env'
 import type { AppVariables } from '../src/server/types'
 
 describe('Edgekit Platform — Fundação, Segurança & Identidade Dupla (Fase 1)', () => {
@@ -17,17 +33,25 @@ describe('Edgekit Platform — Fundação, Segurança & Identidade Dupla (Fase 1
   beforeAll(async () => {
     // Limpa tabelas de teste para garantir execução hermética
     const db = await getDb()
+    try { await db.delete(ekAdminSessions) } catch {}
     try { await db.delete(ekAdmins) } catch {}
     try { await db.delete(ekApiKeys) } catch {}
     try { await db.delete(ekTablePolicies) } catch {}
     try { await db.delete(ekStorageBuckets) } catch {}
     try { await db.delete(ekStorageObjects) } catch {}
     try { await db.delete(ekWebhooks) } catch {}
+    try { await db.delete(invitations) } catch {}
+    try { await db.delete(members) } catch {}
     try { await db.delete(organizations) } catch {}
+    try { await db.delete(sessions) } catch {}
+    try { await db.delete(accounts) } catch {}
+    try { await db.delete(jwks) } catch {}
     try { await db.delete(users) } catch {}
-    try { db.run(sql`DROP TABLE IF EXISTS articles`) } catch {}
-    try { db.run(sql`DROP TABLE IF EXISTS tasks`) } catch {}
-    try { db.run(sql`DROP TABLE IF EXISTS batch_items`) } catch {}
+    try { await db.run(sql`DROP TABLE IF EXISTS articles`) } catch {}
+    try { await db.run(sql`DROP TABLE IF EXISTS tasks`) } catch {}
+    try { await db.run(sql`DROP TABLE IF EXISTS batch_items`) } catch {}
+    try { await db.run(sql`DROP TABLE IF EXISTS user_notes`) } catch {}
+    try { await db.run(sql`DROP TABLE IF EXISTS post_reviews`) } catch {}
   })
 
   it('GET /health deve retornar status ok e serviço Edgekit Platform', async () => {
@@ -55,7 +79,42 @@ describe('Edgekit Platform — Fundação, Segurança & Identidade Dupla (Fase 1
     expect(json.data.adminCount).toBe(0)
   })
 
+  it('POST /api/v1/admin/setup rejeita tentativa sem token ou com token inválido quando SETUP_TOKEN está configurado', async () => {
+    const bindings = await getBindings()
+    if (bindings.SETUP_TOKEN) {
+      // 1. Sem token
+      const noTokenRes = await app.request('/api/v1/admin/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Proprietário Root',
+          email: 'owner@edgekit.dev',
+          password: 'senha-segura-owner-123',
+        }),
+      })
+      expect(noTokenRes.status).toBe(401)
+      const noTokenJson: any = await noTokenRes.json()
+      expect(noTokenJson.error.code).toBe('INVALID_SETUP_TOKEN')
+
+      // 2. Token inválido/forjado
+      const badTokenRes = await app.request('/api/v1/admin/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Proprietário Root',
+          email: 'owner@edgekit.dev',
+          password: 'senha-segura-owner-123',
+          setupToken: 'ek_setup_forged_hacker_token',
+        }),
+      })
+      expect(badTokenRes.status).toBe(401)
+      const badTokenJson: any = await badTokenRes.json()
+      expect(badTokenJson.error.code).toBe('INVALID_SETUP_TOKEN')
+    }
+  })
+
   it('POST /api/v1/admin/setup cria o Proprietário (Owner) e define cookie de sessão', async () => {
+    const bindings = await getBindings()
     const res = await app.request('/api/v1/admin/setup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -63,6 +122,7 @@ describe('Edgekit Platform — Fundação, Segurança & Identidade Dupla (Fase 1
         name: 'Proprietário Root',
         email: 'owner@edgekit.dev',
         password: 'senha-segura-owner-123',
+        setupToken: bindings.SETUP_TOKEN || undefined,
       }),
     })
 
@@ -1236,6 +1296,12 @@ describe('Edgekit Platform — Fundação, Segurança & Identidade Dupla (Fase 1
     let testUserId = ''
 
     beforeAll(async () => {
+      const db = await getDb()
+      try {
+        await db.delete(accounts).where(eq(accounts.accountId, 'sectest@appdomain.com'))
+        await db.delete(users).where(eq(users.email, 'sectest@appdomain.com'))
+      } catch {}
+
       const res = await app.request('/api/v1/auth/sign-up/email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1246,8 +1312,22 @@ describe('Edgekit Platform — Fundação, Segurança & Identidade Dupla (Fase 1
         }),
       })
       const json: any = await res.json()
-      testUserId = json.user.id
-      testUserCookie = res.headers.get('set-cookie')?.split(';')[0] || ''
+      if (res.ok && json.user) {
+        testUserId = json.user.id
+        testUserCookie = res.headers.get('set-cookie')?.split(';')[0] || ''
+      } else {
+        const loginRes = await app.request('/api/v1/auth/sign-in/email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: 'sectest@appdomain.com',
+            password: 'senha-app-user-123',
+          }),
+        })
+        const loginJson: any = await loginRes.json()
+        testUserId = loginJson.user?.id
+        testUserCookie = loginRes.headers.get('set-cookie')?.split(';')[0] || ''
+      }
     })
 
     it('Anti-Hijacking em PATCH: usuário comum não pode transferir titularidade (user_id/organization_id)', async () => {
@@ -1908,6 +1988,105 @@ describe('Edgekit Platform — Fundação, Segurança & Identidade Dupla (Fase 1
       const insertResult = evaluateTablePolicy('projects', 'insert', mockPolicy, orgAContext)
       expect(insertResult.allowed).toBe(true)
       expect(insertResult.injectValues?.organization_id).toBe('org_tenant_A')
+    })
+
+    it('Deny-by-Default: Tabela recém-criada sem registro em _ek_table_policies rejeita anon_key com HTTP 403', async () => {
+      const db = await getDb()
+      await db.run(sql`DROP TABLE IF EXISTS raw_secret_data`)
+      await db.run(sql`CREATE TABLE raw_secret_data (id TEXT PRIMARY KEY, confidential TEXT)`)
+
+      // Consulta sem política cadastrada
+      const res = await app.request('/api/v1/db/raw_secret_data', {
+        headers: { apikey: anonKey },
+      })
+      expect(res.status).toBe(403)
+      const json: any = await res.json()
+      expect(json.error.code).toBe('FORBIDDEN_TABLE')
+      expect(json.error.message).toContain('não possui políticas de acesso configuradas')
+    })
+
+    it('SQL Injection Defense: Rejeita tentativas com caracteres nulos ou pontuação proibida em query parameters', async () => {
+      // Teste com null byte
+      const nullByteRes = await app.request('/api/v1/db/articles?title%00=val', {
+        headers: { apikey: anonKey },
+      })
+      expect(nullByteRes.status).toBe(400)
+      const nullByteJson: any = await nullByteRes.json()
+      expect(nullByteJson.error.code).toBe('INVALID_IDENTIFIER')
+
+      // Teste com caracteres especiais de quebra
+      const specialRes = await app.request('/api/v1/db/articles?title;DELETE=val', {
+        headers: { apikey: anonKey },
+      })
+      expect(specialRes.status).toBe(400)
+      const specialJson: any = await specialRes.json()
+      expect(specialJson.error.code).toBe('INVALID_IDENTIFIER')
+    })
+
+    it('Storage R2: Suporte completo a HTTP 206 (Range Requests) para streaming parcial de arquivos', async () => {
+      // Cria arquivo no bucket público
+      const formData = new FormData()
+      const content = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+      const file = new File([content], 'streaming-test.txt', { type: 'text/plain' })
+      formData.append('file', file)
+      formData.append('path', 'stream')
+
+      const uploadRes = await app.request('/api/v1/storage/default/upload', {
+        method: 'POST',
+        headers: { Cookie: adminCookie },
+        body: formData,
+      })
+      expect(uploadRes.status).toBe(201)
+      const uploadJson: any = await uploadRes.json()
+      const fileKey = uploadJson.data.key
+
+      // 1. Range request parcial: bytes=0-4 (deve retornar ABCDE com status 206)
+      const rangeRes = await app.request(`/api/v1/storage/default/file/${fileKey}`, {
+        headers: { Range: 'bytes=0-4' },
+      })
+      expect(rangeRes.status).toBe(206)
+      expect(rangeRes.headers.get('content-range')).toContain('bytes 0-4/')
+      const partialText = await rangeRes.text()
+      expect(partialText).toBe('ABCDE')
+
+      // 2. Range request com offset: bytes=10-14 (deve retornar KLMNO com status 206)
+      const rangeRes2 = await app.request(`/api/v1/storage/default/file/${fileKey}`, {
+        headers: { Range: 'bytes=10-14' },
+      })
+      expect(rangeRes2.status).toBe(206)
+      expect(rangeRes2.headers.get('content-range')).toContain('bytes 10-14/')
+      const partialText2 = await rangeRes2.text()
+      expect(partialText2).toBe('KLMNO')
+    })
+
+    it('Webhook Ping Test: Endpoint /api/v1/webhooks/:id/test executa validação e medição de latência', async () => {
+      // 1. Cria webhook de teste
+      const createRes = await app.request('/api/v1/webhooks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
+        body: JSON.stringify({
+          name: 'Latency Test Webhook',
+          url: 'https://httpbin.org/post',
+          events: ['db:articles:insert'],
+        }),
+      })
+      expect(createRes.status).toBe(201)
+      const createJson: any = await createRes.json()
+      const webhookId = createJson.data.id
+
+      // 2. Executa ping test
+      const testRes = await app.request(`/api/v1/webhooks/${webhookId}/test`, {
+        method: 'POST',
+        headers: { Cookie: adminCookie },
+      })
+      expect(testRes.status).toBe(200)
+      const testJson: any = await testRes.json()
+      expect(testJson.success).toBe(true)
+      expect(testJson.data).toBeDefined()
+      expect(testJson.data.webhookId).toBe(webhookId)
+      expect(typeof testJson.data.latencyMs).toBe('number')
+      expect(typeof testJson.data.statusCode).toBe('number')
+      expect(testJson.data.signatureSent).toContain('sha256=')
     })
   })
 })

@@ -26,7 +26,6 @@ const SYSTEM_TABLES = new Set([
   'drizzle_migrations',
   '_ek_migrations',
   '__d1_migrations',
-  '__honobase_migrations',
 ])
 
 const tableColumnsCache = new Map<string, { columns: Set<string>; cachedAt: number }>()

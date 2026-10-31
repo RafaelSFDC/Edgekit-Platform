@@ -170,6 +170,7 @@ webhookRoutes.post('/:id/test', async (c) => {
     return c.json({
       success: res.ok,
       data: {
+        webhookId: webhook.id,
         statusCode: res.status,
         statusText: res.statusText,
         latencyMs,
