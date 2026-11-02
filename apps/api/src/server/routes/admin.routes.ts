@@ -645,6 +645,64 @@ adminRoutes.get('/tables', requireAdmin(), async (c) => {
   return c.json({ success: true, data: tablesWithCounts })
 })
 
+function mapSqliteTypeToTs(type: string): string {
+  const t = (type || 'TEXT').toUpperCase()
+  if (t.includes('INT')) return 'number'
+  if (t.includes('REAL') || t.includes('FLOAT') || t.includes('DOUB')) return 'number'
+  if (t.includes('BOOL')) return 'boolean'
+  if (t.includes('BLOB')) return 'Uint8Array'
+  if (t.includes('JSON')) return 'any'
+  return 'string'
+}
+
+// Gerador de tipos TypeScript a partir do schema (Seção 16.1)
+adminRoutes.get('/schema/types', requireAdmin(), async (c) => {
+  const db = await getDb()
+  const rows: any[] = await db.all(
+    sql`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_ek_%' AND name NOT LIKE 'drizzle_%' ORDER BY name ASC`,
+  )
+
+  let output = `/**\n * Edgekit Platform — Tipagens TypeScript Geradas Automaticamente (Seção 16.1)\n * Gerado em: ${new Date().toISOString()}\n */\n\n`
+  output += `export interface DatabaseSchema {\n`
+  for (const { name } of rows) {
+    output += `  ${name}: {\n`
+    output += `    Row: ${name}Row\n`
+    output += `    Insert: ${name}Insert\n`
+    output += `    Update: ${name}Update\n`
+    output += `  }\n`
+  }
+  output += `}\n\n`
+
+  for (const { name } of rows) {
+    const columns: any[] = await db.all(sql.raw(`PRAGMA table_info(\`${name}\`)`))
+    output += `export interface ${name}Row {\n`
+    for (const col of columns) {
+      const tsType = mapSqliteTypeToTs(col.type)
+      const nullable = col.notnull === 0 ? ' | null' : ''
+      output += `  ${col.name}: ${tsType}${nullable}\n`
+    }
+    output += `}\n\n`
+
+    output += `export interface ${name}Insert {\n`
+    for (const col of columns) {
+      const tsType = mapSqliteTypeToTs(col.type)
+      const optional = col.pk === 1 || col.dflt_value !== null || col.notnull === 0 ? '?' : ''
+      const nullable = col.notnull === 0 ? ' | null' : ''
+      output += `  ${col.name}${optional}: ${tsType}${nullable}\n`
+    }
+    output += `}\n\n`
+
+    output += `export interface ${name}Update {\n`
+    for (const col of columns) {
+      const tsType = mapSqliteTypeToTs(col.type)
+      output += `  ${col.name}?: ${tsType} | null\n`
+    }
+    output += `}\n\n`
+  }
+
+  return c.json({ success: true, data: { typescript: output } })
+})
+
 // Criar nova tabela visualmente
 adminRoutes.post('/tables', requireAdmin(), async (c) => {
   const body = await c.req.json().catch(() => ({}))

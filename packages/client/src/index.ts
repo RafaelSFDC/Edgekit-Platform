@@ -1,5 +1,7 @@
+/* eslint-disable unicorn/no-thenable */
 export interface EdgekitClientOptions {
   url: string
+  key?: string
   anonKey?: string
   serviceRoleKey?: string
   token?: string
@@ -7,8 +9,18 @@ export interface EdgekitClientOptions {
   fetch?: typeof fetch
 }
 
-export interface QueryBuilder<T = any> {
-  select(columns: string): QueryBuilder<T>
+export interface QueryResult<T = any> {
+  data: T | null
+  error: Error | null
+  meta?: any
+}
+
+export interface OrderOptions {
+  ascending?: boolean
+}
+
+export interface QueryBuilder<T = any> extends PromiseLike<QueryResult<T>> {
+  select(columns?: string): QueryBuilder<T>
   expand(relations: string | string[]): QueryBuilder<T>
   eq(column: string, value: any): QueryBuilder<T>
   neq(column: string, value: any): QueryBuilder<T>
@@ -17,15 +29,46 @@ export interface QueryBuilder<T = any> {
   lt(column: string, value: any): QueryBuilder<T>
   lte(column: string, value: any): QueryBuilder<T>
   like(column: string, pattern: string): QueryBuilder<T>
+  ilike(column: string, pattern: string): QueryBuilder<T>
   in(column: string, values: any[]): QueryBuilder<T>
   notIn(column: string, values: any[]): QueryBuilder<T>
+  is(column: string, value: null | boolean | string): QueryBuilder<T>
   isNull(column: string): QueryBuilder<T>
   isNotNull(column: string): QueryBuilder<T>
+  between(column: string, min: any, max: any): QueryBuilder<T>
+  contains(column: string, value: any): QueryBuilder<T>
+  containedBy(column: string, value: any): QueryBuilder<T>
+  overlaps(column: string, value: any): QueryBuilder<T>
+  or(filters: string): QueryBuilder<T>
+  not(column: string, operator: string, value: any): QueryBuilder<T>
   filter(column: string, operator: string, value: any): QueryBuilder<T>
-  order(column: string, direction?: 'asc' | 'desc'): QueryBuilder<T>
+  order(column: string, optionsOrDirection?: OrderOptions | 'asc' | 'desc'): QueryBuilder<T>
   limit(count: number): QueryBuilder<T>
   offset(count: number): QueryBuilder<T>
-  execute(): Promise<{ data: T[] | null; error: Error | null; meta?: any }>
+  range(from: number, to: number): QueryBuilder<T>
+  single(): QueryBuilder<T>
+  execute(): Promise<QueryResult<T>>
+  then<TResult1 = QueryResult<T>, TResult2 = never>(
+    onfulfilled?: ((value: QueryResult<T>) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null,
+  ): Promise<TResult1 | TResult2>
+}
+
+export interface InsertBuilder<T = any> extends PromiseLike<QueryResult<T>> {
+  select(columns?: string): InsertBuilder<T>
+  execute(): Promise<QueryResult<T>>
+  then<TResult1 = QueryResult<T>, TResult2 = never>(
+    onfulfilled?: ((value: QueryResult<T>) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null,
+  ): Promise<TResult1 | TResult2>
+}
+
+export interface MutationBuilder<T = any> extends PromiseLike<QueryResult<T>> {
+  execute(): Promise<QueryResult<T>>
+  then<TResult1 = QueryResult<T>, TResult2 = never>(
+    onfulfilled?: ((value: QueryResult<T>) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null,
+  ): Promise<TResult1 | TResult2>
 }
 
 export interface RealtimeChannel {
@@ -37,7 +80,7 @@ export interface RealtimeChannel {
 
 export function createEdgekitClient(options: EdgekitClientOptions) {
   const baseUrl = options.url.replace(/\/+$/, '')
-  const apiKey = options.serviceRoleKey || options.anonKey || ''
+  const apiKey = options.key || options.serviceRoleKey || options.anonKey || ''
   const customFetch = options.fetch || globalThis.fetch
   const fetchCredentials = options.credentials || 'include'
 
@@ -190,12 +233,13 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
     },
   }
 
-  // 2. DATABASE CLIENT & QUERY BUILDER (com suporte a Realtime CDC)
+  // 2. DATABASE CLIENT & QUERY BUILDER (com suporte a Realtime CDC e Thenable)
   function from<T = any>(table: string) {
     const params = new URLSearchParams()
+    let isSingle = false
 
     const builder: QueryBuilder<T> = {
-      select(columns: string) {
+      select(columns = '*') {
         params.set('select', columns)
         return builder
       },
@@ -232,6 +276,10 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
         params.set(col, `like:${pattern}`)
         return builder
       },
+      ilike(col: string, pattern: string) {
+        params.set(col, `ilike:${pattern}`)
+        return builder
+      },
       in(col: string, values: any[]) {
         params.set(col, `in:${values.join(',')}`)
         return builder
@@ -240,12 +288,46 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
         params.set(col, `not_in:${values.join(',')}`)
         return builder
       },
+      is(col: string, val: null | boolean | string) {
+        if (val === null) params.set(col, 'is:null')
+        else if (val === true) params.set(col, 'is:true')
+        else if (val === false) params.set(col, 'is:false')
+        else params.set(col, `is:${val}`)
+        return builder
+      },
       isNull(col: string) {
         params.set(col, 'is:null')
         return builder
       },
       isNotNull(col: string) {
         params.set(col, 'is:not_null')
+        return builder
+      },
+      between(col: string, min: any, max: any) {
+        params.set(col, `between:${min},${max}`)
+        return builder
+      },
+      contains(col: string, val: any) {
+        const repr = Array.isArray(val) ? val.join(',') : typeof val === 'object' ? JSON.stringify(val) : String(val)
+        params.set(col, `contains:${repr}`)
+        return builder
+      },
+      containedBy(col: string, val: any) {
+        const repr = Array.isArray(val) ? val.join(',') : typeof val === 'object' ? JSON.stringify(val) : String(val)
+        params.set(col, `contained_by:${repr}`)
+        return builder
+      },
+      overlaps(col: string, val: any) {
+        const repr = Array.isArray(val) ? val.join(',') : typeof val === 'object' ? JSON.stringify(val) : String(val)
+        params.set(col, `overlaps:${repr}`)
+        return builder
+      },
+      or(filters: string) {
+        params.set('or', filters)
+        return builder
+      },
+      not(col: string, operator: string, val: any) {
+        params.set(col, `not:${operator}:${val}`)
         return builder
       },
       filter(col: string, op: string, val: any) {
@@ -262,11 +344,20 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
         if (cleanOp === 'is_not' && val === null) {
           return builder.isNotNull(col)
         }
+        if (cleanOp === 'ilike') {
+          return builder.ilike(col, val)
+        }
         params.set(col, `${cleanOp}:${val}`)
         return builder
       },
-      order(col: string, direction = 'asc') {
-        params.set('order', `${col}.${direction}`)
+      order(col: string, optionsOrDir: OrderOptions | 'asc' | 'desc' = 'asc') {
+        let dir = 'asc'
+        if (typeof optionsOrDir === 'string') {
+          dir = optionsOrDir.toLowerCase() === 'desc' ? 'desc' : 'asc'
+        } else if (typeof optionsOrDir === 'object' && optionsOrDir !== null) {
+          dir = optionsOrDir.ascending === false ? 'desc' : 'asc'
+        }
+        params.set('order', `${col}.${dir}`)
         return builder
       },
       limit(count: number) {
@@ -277,7 +368,19 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
         params.set('offset', String(count))
         return builder
       },
-      async execute() {
+      range(from: number, to: number) {
+        const limitCount = Math.max(0, to - from + 1)
+        params.set('limit', String(limitCount))
+        params.set('offset', String(Math.max(0, from)))
+        return builder
+      },
+      single() {
+        isSingle = true
+        params.set('single', 'true')
+        params.set('limit', '2')
+        return builder
+      },
+      async execute(): Promise<QueryResult<T>> {
         try {
           const queryString = params.toString() ? `?${params.toString()}` : ''
           const res = await customFetch(`${baseUrl}/api/v1/db/${table}${queryString}`, req())
@@ -285,70 +388,128 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
           if (!res.ok || !json.success) {
             return { data: null, error: new Error(json.error?.message || 'Database error') }
           }
+
+          if (isSingle) {
+            const rows = json.data
+            if (!Array.isArray(rows) || rows.length === 0) {
+              return {
+                data: null,
+                error: new Error('JSON object requested, multiple (or no) rows returned'),
+              }
+            }
+            if (rows.length > 1) {
+              return {
+                data: null,
+                error: new Error('JSON object requested, multiple rows returned'),
+              }
+            }
+            return { data: rows[0], error: null }
+          }
+
           return { data: json.data, error: null, meta: json.meta }
         } catch (err: any) {
           return { data: null, error: err }
         }
       },
+      then(onfulfilled, onrejected) {
+        return builder.execute().then(onfulfilled, onrejected)
+      },
     }
 
     return {
       ...builder,
-      async insert(recordOrRecords: any) {
-        try {
-          const res = await customFetch(
-            `${baseUrl}/api/v1/db/${table}`,
-            req({
-              method: 'POST',
-              body: JSON.stringify(recordOrRecords),
-            }),
-          )
-          const json: any = await res.json()
-          if (!res.ok || !json.success) {
-            return { data: null, error: new Error(json.error?.message || 'Insert error') }
+      insert(recordOrRecords: any): InsertBuilder<T> {
+        let selectClause = ''
+        const execInsert = async (): Promise<QueryResult<any>> => {
+          try {
+            const q = selectClause ? `?select=${encodeURIComponent(selectClause)}` : ''
+            const res = await customFetch(
+              `${baseUrl}/api/v1/db/${table}${q}`,
+              req({
+                method: 'POST',
+                body: JSON.stringify(recordOrRecords),
+              }),
+            )
+            const json: any = await res.json()
+            if (!res.ok || !json.success) {
+              return { data: null, error: new Error(json.error?.message || 'Insert error') }
+            }
+            return { data: json.data, error: null }
+          } catch (err: any) {
+            return { data: null, error: err }
           }
-          return { data: json.data, error: null }
-        } catch (err: any) {
-          return { data: null, error: err }
         }
+
+        const insertObj: InsertBuilder<T> = {
+          select(columns = '*') {
+            selectClause = columns
+            return insertObj
+          },
+          execute() {
+            return execInsert()
+          },
+          then(onfulfilled, onrejected) {
+            return execInsert().then(onfulfilled, onrejected)
+          },
+        }
+
+        return insertObj
       },
       update(updates: any) {
         return {
-          async eq(col: string, id: any) {
-            try {
-              const res = await customFetch(
-                `${baseUrl}/api/v1/db/${table}/${id}`,
-                req({
-                  method: 'PATCH',
-                  body: JSON.stringify(updates),
-                }),
-              )
-              const json: any = await res.json()
-              if (!res.ok || !json.success) {
-                return { data: null, error: new Error(json.error?.message || 'Update error') }
+          eq(col: string, id: any): MutationBuilder<T> {
+            const execUpdate = async (): Promise<QueryResult<any>> => {
+              try {
+                const res = await customFetch(
+                  `${baseUrl}/api/v1/db/${table}/${id}`,
+                  req({
+                    method: 'PATCH',
+                    body: JSON.stringify(updates),
+                  }),
+                )
+                const json: any = await res.json()
+                if (!res.ok || !json.success) {
+                  return { data: null, error: new Error(json.error?.message || 'Update error') }
+                }
+                return { data: json.data, error: null }
+              } catch (err: any) {
+                return { data: null, error: err }
               }
-              return { data: json.data, error: null }
-            } catch (err: any) {
-              return { data: null, error: err }
+            }
+
+            return {
+              execute: execUpdate,
+              then(onfulfilled, onrejected) {
+                return execUpdate().then(onfulfilled, onrejected)
+              },
             }
           },
         }
       },
       delete() {
         return {
-          async eq(col: string, id: any) {
-            try {
-              const res = await customFetch(
-                `${baseUrl}/api/v1/db/${table}/${id}`,
-                req({ method: 'DELETE' }),
-              )
-              const json: any = await res.json()
-              if (!res.ok || !json.success) {
-                return { data: null, error: new Error(json.error?.message || 'Delete error') }
+          eq(col: string, id: any): MutationBuilder<T> {
+            const execDelete = async (): Promise<QueryResult<any>> => {
+              try {
+                const res = await customFetch(
+                  `${baseUrl}/api/v1/db/${table}/${id}`,
+                  req({ method: 'DELETE' }),
+                )
+                const json: any = await res.json()
+                if (!res.ok || !json.success) {
+                  return { data: null, error: new Error(json.error?.message || 'Delete error') }
+                }
+                return { data: json, error: null }
+              } catch (err: any) {
+                return { data: null, error: err }
               }
-              return { data: json, error: null }
-            } catch (err: any) {
-              return { data: null, error: err }
+            }
+
+            return {
+              execute: execDelete,
+              then(onfulfilled, onrejected) {
+                return execDelete().then(onfulfilled, onrejected)
+              },
             }
           },
         }
@@ -374,6 +535,7 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
         orderBy?: Array<{ field: string; direction?: 'asc' | 'desc' }>
         limit?: number
         offset?: number
+        single?: boolean
       }) {
         try {
           const res = await customFetch(
@@ -498,13 +660,66 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
     },
   }
 
+  // 5. FUNCTIONS CLIENT (Seção 11)
+  const functions = {
+    async invoke<T = any>(
+      functionName: string,
+      options: {
+        method?: string
+        body?: any
+        headers?: Record<string, string>
+      } = {},
+    ): Promise<{ data: T | null; error: Error | null; status: number }> {
+      try {
+        const method = (options.method || (options.body ? 'POST' : 'GET')).toUpperCase()
+        const customHeaders = {
+          ...headers,
+          ...options.headers,
+        }
+        const body =
+          options.body !== undefined
+            ? typeof options.body === 'string'
+              ? options.body
+              : JSON.stringify(options.body)
+            : undefined
+
+        const fetchInit: any = {
+          method,
+          headers: customHeaders,
+          body,
+        }
+        if (fetchCredentials) {
+          fetchInit.credentials = fetchCredentials
+        }
+
+        const res = await customFetch(`${baseUrl}/api/v1/functions/${encodeURIComponent(functionName)}`, fetchInit)
+
+        const contentType = res.headers.get('content-type') || ''
+        const data: any = contentType.includes('application/json') ? await res.json() : await res.text()
+
+        if (!res.ok) {
+          const errMsg = typeof data === 'object' && data?.error?.message ? data.error.message : `Function failed with status ${res.status}`
+          return { data: null, error: new Error(errMsg), status: res.status }
+        }
+
+        return { data: data as T, error: null, status: res.status }
+      } catch (err: any) {
+        return { data: null, error: err, status: 500 }
+      }
+    },
+  }
+
   return {
     from,
     storage,
     realtime,
     auth,
+    functions,
     setToken,
     url: baseUrl,
   }
 }
 
+// Exportação canônica conforme Seção 6.2 do Master System Prompt:
+// import { createClient } from "@edgekit/platform-client"
+export const createClient = createEdgekitClient

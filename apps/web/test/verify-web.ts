@@ -46,6 +46,10 @@ async function verifyWebDashboard() {
   assert.strictEqual(typeof apiServices.logoutAuth, 'function', 'logoutAuth deve ser uma função');
   assert.strictEqual(typeof apiServices.fetchAuthMe, 'function', 'fetchAuthMe deve ser uma função');
   assert.strictEqual(typeof apiServices.fetchTables, 'function', 'fetchTables deve ser uma função');
+  assert.strictEqual(typeof apiServices.runStructuredQuery, 'function', 'runStructuredQuery deve ser uma função');
+  assert.strictEqual(typeof apiServices.fetchFunctionsList, 'function', 'fetchFunctionsList deve ser uma função');
+  assert.strictEqual(typeof apiServices.invokeFunctionTest, 'function', 'invokeFunctionTest deve ser uma função');
+  assert.strictEqual(typeof apiServices.fetchGeneratedTypes, 'function', 'fetchGeneratedTypes deve ser uma função');
   assert.strictEqual(typeof apiServices.runSql, 'function', 'runSql deve ser uma função');
   console.log('✅ Métodos de comunicação da API do Dashboard Web validados!');
 

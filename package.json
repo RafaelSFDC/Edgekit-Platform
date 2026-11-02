@@ -18,6 +18,7 @@
     "db:migrate:prod": "tsx scripts/migrate-d1-prod.ts",
     "db:migrate:prod:list": "tsx scripts/migrate-d1-prod.ts --list",
     "db:studio": "drizzle-kit studio",
+    "db:typegen": "tsx scripts/generate-types.ts",
     "build:client": "pnpm --filter @edgekit/platform-client build",
     "build:web": "pnpm --filter @edgekit/platform-web build",
     "build:api": "pnpm --filter @edgekit/platform-api build",

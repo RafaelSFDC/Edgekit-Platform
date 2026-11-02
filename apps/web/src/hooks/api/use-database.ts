@@ -10,6 +10,7 @@ import {
   deleteTableRow,
   fetchTablePolicy,
   updateTablePolicy,
+  runStructuredQuery,
   runSql,
   createTable,
   dropTable,
@@ -158,5 +159,12 @@ export function useRunSqlMutation() {
         queryKey: queryKeys.stats.detail(),
       });
     },
+  });
+}
+
+export function useStructuredQueryMutation() {
+  return useMutation({
+    mutationFn: ({ table, spec }: { table: string; spec: any }) =>
+      runStructuredQuery(table, spec),
   });
 }

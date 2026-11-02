@@ -265,11 +265,20 @@ dbRoutes.get('/:table', async (c) => {
   }
 
   const query = c.req.query()
+  const body: any = {}
   const selectParam = query['select'] || '*'
   const expandParam = query['expand']
-  const limitParam = Math.min(Math.max(Number(query['limit']) || 50, 1), 500)
-  const offsetParam = Math.max(Number(query['offset']) || 0, 0)
+  let limitParam = Math.min(Math.max(Number(query['limit']) || 50, 1), 500)
+  let offsetParam = Math.max(Number(query['offset']) || 0, 0)
   const orderParam = query['order']
+
+  if (query['range']) {
+    const [rFrom, rTo] = query['range'].split('-').map(Number)
+    if (!isNaN(rFrom) && !isNaN(rTo)) {
+      limitParam = Math.min(Math.max(rTo - rFrom + 1, 1), 500)
+      offsetParam = Math.max(rFrom, 0)
+    }
+  }
 
   let selectClause = '*'
   if (selectParam !== '*') {
@@ -306,7 +315,7 @@ dbRoutes.get('/:table', async (c) => {
     whereConditions.push(policyResult.whereCondition)
   }
 
-  const reservedParams = new Set(['select', 'limit', 'offset', 'order', 'apikey', 'expand'])
+  const reservedParams = new Set(['select', 'limit', 'offset', 'order', 'apikey', 'expand', 'single', 'range', 'or'])
 
   for (const [key, value] of Object.entries(query)) {
     if (reservedParams.has(key) || value === undefined || value === '') continue
@@ -335,6 +344,8 @@ dbRoutes.get('/:table', async (c) => {
       whereConditions.push(sql`${colIdentifier} <= ${value.slice(4)}`)
     } else if (value.startsWith('like:')) {
       whereConditions.push(sql`${colIdentifier} LIKE ${value.slice(5)}`)
+    } else if (value.startsWith('ilike:')) {
+      whereConditions.push(sql`LOWER(${colIdentifier}) LIKE LOWER(${value.slice(6)})`)
     } else if (value.startsWith('in:')) {
       const items = value.slice(3).split(',').map((s) => s.trim())
       if (items.length > 0) {
@@ -345,12 +356,73 @@ dbRoutes.get('/:table', async (c) => {
       if (items.length > 0) {
         whereConditions.push(sql`${colIdentifier} NOT IN (${sql.join(items.map((i) => sql`${i}`), sql.raw(', '))})`)
       }
-    } else if (value === 'is:null') {
-      whereConditions.push(sql`${colIdentifier} IS NULL`)
-    } else if (value === 'is:not_null') {
-      whereConditions.push(sql`${colIdentifier} IS NOT NULL`)
+    } else if (value.startsWith('is:')) {
+      const isVal = value.slice(3).toLowerCase()
+      if (isVal === 'null') {
+        whereConditions.push(sql`${colIdentifier} IS NULL`)
+      } else if (isVal === 'not_null' || isVal === 'not.null') {
+        whereConditions.push(sql`${colIdentifier} IS NOT NULL`)
+      } else if (isVal === 'true') {
+        whereConditions.push(sql`${colIdentifier} = 1`)
+      } else if (isVal === 'false') {
+        whereConditions.push(sql`${colIdentifier} = 0`)
+      } else {
+        whereConditions.push(sql`${colIdentifier} = ${value.slice(3)}`)
+      }
+    } else if (value.startsWith('between:')) {
+      const [bMin, bMax] = value.slice(8).split(',')
+      whereConditions.push(sql`${colIdentifier} BETWEEN ${bMin} AND ${bMax}`)
+    } else if (value.startsWith('contains:')) {
+      const cVal = value.slice(9)
+      whereConditions.push(sql`${colIdentifier} LIKE ${`%${cVal}%`}`)
+    } else if (value.startsWith('contained_by:') || value.startsWith('containedBy:')) {
+      const cVal = value.startsWith('contained_by:') ? value.slice(13) : value.slice(12)
+      whereConditions.push(sql`${colIdentifier} LIKE ${`%${cVal}%`}`)
+    } else if (value.startsWith('overlaps:')) {
+      const oItems = value.slice(9).split(',').map((s) => s.trim()).filter(Boolean)
+      if (oItems.length > 0) {
+        const oConds = oItems.map((item) => sql`${colIdentifier} LIKE ${`%${item}%`}`)
+        whereConditions.push(sql`(${sql.join(oConds, sql.raw(' OR '))})`)
+      }
+    } else if (value.startsWith('not:')) {
+      const notRest = value.slice(4)
+      const colonIdx = notRest.indexOf(':')
+      if (colonIdx > 0) {
+        const subOp = notRest.slice(0, colonIdx)
+        const subVal = notRest.slice(colonIdx + 1)
+        if (subOp === 'eq') whereConditions.push(sql`${colIdentifier} != ${subVal}`)
+        else if (subOp === 'like') whereConditions.push(sql`${colIdentifier} NOT LIKE ${subVal}`)
+        else if (subOp === 'ilike') whereConditions.push(sql`LOWER(${colIdentifier}) NOT LIKE LOWER(${subVal})`)
+        else whereConditions.push(sql`NOT (${colIdentifier} = ${subVal})`)
+      }
     } else {
       whereConditions.push(sql`${colIdentifier} = ${value}`)
+    }
+  }
+
+  if (query['or']) {
+    const parts = query['or'].split(',').map((s) => s.trim()).filter(Boolean)
+    const orConditions: SQL[] = []
+    for (const p of parts) {
+      const dotParts = p.split('.')
+      if (dotParts.length >= 3) {
+        const [f, o, ...vParts] = dotParts
+        const v = vParts.join('.')
+        if (SAFE_IDENTIFIER.test(f) && (validColumns.size === 0 || validColumns.has(f.toLowerCase()))) {
+          const fCol = sql.raw(`\`${f}\``)
+          if (o === 'eq') orConditions.push(sql`${fCol} = ${v}`)
+          else if (o === 'neq') orConditions.push(sql`${fCol} != ${v}`)
+          else if (o === 'gt') orConditions.push(sql`${fCol} > ${v}`)
+          else if (o === 'gte') orConditions.push(sql`${fCol} >= ${v}`)
+          else if (o === 'lt') orConditions.push(sql`${fCol} < ${v}`)
+          else if (o === 'lte') orConditions.push(sql`${fCol} <= ${v}`)
+          else if (o === 'like') orConditions.push(sql`${fCol} LIKE ${v}`)
+          else if (o === 'ilike') orConditions.push(sql`LOWER(${fCol}) LIKE LOWER(${v})`)
+        }
+      }
+    }
+    if (orConditions.length > 0) {
+      whereConditions.push(sql`(${sql.join(orConditions, sql.raw(' OR '))})`)
     }
   }
 
@@ -388,6 +460,16 @@ dbRoutes.get('/:table', async (c) => {
 
     const total = countResult?.[0]?.total ?? rawRows.length
     const rows = await expandRelations(db, table, rawRows, expandParam)
+
+    if (body.single === true || c.req.query('single') === 'true') {
+      if (rows.length === 0) {
+        return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'JSON object requested, multiple (or no) rows returned' } }, 404)
+      }
+      if (rows.length > 1) {
+        return c.json({ success: false, error: { code: 'MULTIPLE_ROWS', message: 'JSON object requested, multiple rows returned' } }, 406)
+      }
+      return c.json({ success: true, data: rows[0] })
+    }
 
     return c.json({
       success: true,
@@ -527,6 +609,9 @@ dbRoutes.post('/:table/query', async (c) => {
       case 'like':
         whereConditions.push(sql`${colIdentifier} LIKE ${val}`)
         break
+      case 'ilike':
+        whereConditions.push(sql`LOWER(${colIdentifier}) LIKE LOWER(${val})`)
+        break
       case 'in': {
         const items = Array.isArray(val) ? val : [val]
         if (items.length > 0) {
@@ -541,11 +626,45 @@ dbRoutes.post('/:table/query', async (c) => {
         }
         break
       }
+      case 'is':
+        if (val === null || val === 'null') {
+          whereConditions.push(sql`${colIdentifier} IS NULL`)
+        } else if (val === true || val === 'true') {
+          whereConditions.push(sql`${colIdentifier} = 1`)
+        } else if (val === false || val === 'false') {
+          whereConditions.push(sql`${colIdentifier} = 0`)
+        } else {
+          whereConditions.push(sql`${colIdentifier} = ${val}`)
+        }
+        break
       case 'is_null':
         whereConditions.push(sql`${colIdentifier} IS NULL`)
         break
       case 'is_not_null':
         whereConditions.push(sql`${colIdentifier} IS NOT NULL`)
+        break
+      case 'between': {
+        const [bMin, bMax] = Array.isArray(val) ? val : String(val).split(',')
+        whereConditions.push(sql`${colIdentifier} BETWEEN ${bMin} AND ${bMax}`)
+        break
+      }
+      case 'contains':
+        whereConditions.push(sql`${colIdentifier} LIKE ${`%${val}%`}`)
+        break
+      case 'containedby':
+      case 'contained_by':
+        whereConditions.push(sql`${colIdentifier} LIKE ${`%${val}%`}`)
+        break
+      case 'overlaps': {
+        const oItems = Array.isArray(val) ? val : String(val).split(',').map((s) => s.trim()).filter(Boolean)
+        if (oItems.length > 0) {
+          const oConds = oItems.map((item) => sql`${colIdentifier} LIKE ${`%${item}%`}`)
+          whereConditions.push(sql`(${sql.join(oConds, sql.raw(' OR '))})`)
+        }
+        break
+      }
+      case 'not':
+        whereConditions.push(sql`NOT (${colIdentifier} = ${val})`)
         break
       default:
         whereConditions.push(sql`${colIdentifier} = ${val}`)
@@ -591,6 +710,16 @@ dbRoutes.post('/:table/query', async (c) => {
 
     const total = countResult?.[0]?.total ?? rawRows.length
     const rows = await expandRelations(db, table, rawRows, expandParam)
+
+    if (body.single === true || c.req.query('single') === 'true') {
+      if (rows.length === 0) {
+        return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'JSON object requested, multiple (or no) rows returned' } }, 404)
+      }
+      if (rows.length > 1) {
+        return c.json({ success: false, error: { code: 'MULTIPLE_ROWS', message: 'JSON object requested, multiple rows returned' } }, 406)
+      }
+      return c.json({ success: true, data: rows[0] })
+    }
 
     return c.json({
       success: true,

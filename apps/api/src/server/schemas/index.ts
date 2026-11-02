@@ -42,10 +42,18 @@ export const StructuredQuerySchema = z.object({
             'lt',
             'lte',
             'like',
+            'ilike',
             'in',
             'not_in',
+            'is',
             'is_null',
             'is_not_null',
+            'between',
+            'contains',
+            'containedBy',
+            'contained_by',
+            'overlaps',
+            'not',
           ])
           .default('eq'),
         value: z.any().optional(),
@@ -63,6 +71,7 @@ export const StructuredQuerySchema = z.object({
     .optional(),
   limit: z.number().int().min(1).max(500).optional(),
   offset: z.number().int().min(0).optional(),
+  single: z.boolean().optional(),
 })
 
 export type StructuredQueryInput = z.infer<typeof StructuredQuerySchema>

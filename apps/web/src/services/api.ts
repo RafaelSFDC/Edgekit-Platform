@@ -284,6 +284,92 @@ export async function deleteTableRow(table: string, id: string): Promise<boolean
   return true;
 }
 
+export async function runStructuredQuery(
+  table: string,
+  spec: {
+    select?: string[] | string;
+    where?: Array<{ field: string; op: string; value: any }>;
+    orderBy?: Array<{ field: string; direction?: 'asc' | 'desc' }>;
+    limit?: number;
+    offset?: number;
+    expand?: string[] | string;
+    single?: boolean;
+  },
+): Promise<{
+  success: boolean;
+  data?: any[];
+  meta?: { total: number; limit: number; offset: number; hasMore: boolean };
+  error?: { message: string; code?: string };
+}> {
+  const res = await fetch(`${API_BASE}/api/v1/db/${encodeURIComponent(table)}/query`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(spec),
+  });
+
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    return {
+      success: false,
+      error: {
+        message: json.error?.message || 'Falha ao executar consulta declarativa.',
+        code: json.error?.code,
+      },
+    };
+  }
+  return json;
+}
+
+export async function fetchFunctionsList(): Promise<
+  Array<{
+    name: string;
+    description: string;
+    methods: string[];
+    endpoint: string;
+  }>
+> {
+  const res = await fetch(`${API_BASE}/api/v1/functions`, {
+    headers: getHeaders(),
+  });
+  if (!res.ok) {
+    throw new ApiError('Falha ao listar Edge Functions locais.', res.status);
+  }
+  const json = await res.json();
+  return json.data || [];
+}
+
+export async function invokeFunctionTest(
+  functionName: string,
+  method = 'GET',
+  body?: any,
+): Promise<{ status: number; ok: boolean; data: any }> {
+  const init: RequestInit = {
+    method,
+    headers: getHeaders(),
+  };
+  if (body && method !== 'GET') {
+    init.body = typeof body === 'string' ? body : JSON.stringify(body);
+  }
+  const res = await fetch(`${API_BASE}/api/v1/functions/${encodeURIComponent(functionName)}`, init);
+  const text = await res.text();
+  try {
+    return { status: res.status, ok: res.ok, data: JSON.parse(text) };
+  } catch {
+    return { status: res.status, ok: res.ok, data: text };
+  }
+}
+
+export async function fetchGeneratedTypes(): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/schema/types`, {
+    headers: getHeaders(),
+  });
+  if (!res.ok) {
+    throw new ApiError('Falha ao gerar tipagens TypeScript do schema.', res.status);
+  }
+  const json = await res.json();
+  return json.data?.typescript || '';
+}
+
 export async function runSql(query: string): Promise<SqlQueryResult> {
   const res = await fetch(`${API_BASE}/api/v1/admin/sql`, {
     method: 'POST',

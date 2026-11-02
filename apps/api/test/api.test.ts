@@ -2089,4 +2089,131 @@ describe('Edgekit Platform — Fundação, Segurança & Identidade Dupla (Fase 1
       expect(testJson.data.signatureSent).toContain('sha256=')
     })
   })
+
+  describe('Edgekit Platform — Conformidade Canônica Master Prompt (2026)', () => {
+    it('Operadores Canônicos e Range em GET /api/v1/db/:table', async () => {
+      // 0. Semeia artigo de teste
+      await app.request('/api/v1/db/articles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: serviceRoleKey },
+        body: JSON.stringify({ id: 'art_single_test', title: 'Tech Trends 2026' }),
+      })
+
+      // 1. Testa range e ilike
+      const res = await app.request('/api/v1/db/articles?title=ilike:%tech%&range=0-4', {
+        headers: { apikey: anonKey },
+      })
+      expect(res.status).toBe(200)
+      const json: any = await res.json()
+      expect(json.success).toBe(true)
+      expect(Array.isArray(json.data)).toBe(true)
+      expect(json.meta.limit).toBe(5)
+      expect(json.meta.offset).toBe(0)
+    })
+
+    it('single=true em GET /api/v1/db/:table desembala objeto único ou retorna erro', async () => {
+      // 1. single=true com resultado existente
+      const res = await app.request('/api/v1/db/articles?limit=1&single=true', {
+        headers: { apikey: anonKey },
+      })
+      expect(res.status).toBe(200)
+      const json: any = await res.json()
+      expect(json.success).toBe(true)
+      expect(typeof json.data).toBe('object')
+      expect(Array.isArray(json.data)).toBe(false)
+      expect(json.data.id).toBeDefined()
+
+      // 2. single=true com resultado inexistente retorna 404
+      const resEmpty = await app.request('/api/v1/db/articles?title=eq:nonexistent_title_xyz&single=true', {
+        headers: { apikey: anonKey },
+      })
+      expect(resEmpty.status).toBe(404)
+      const jsonEmpty: any = await resEmpty.json()
+      expect(jsonEmpty.error.code).toBe('NOT_FOUND')
+    })
+
+    it('Operadores Canônicos (ilike, is, between, contains, single) em POST /api/v1/db/:table/query', async () => {
+      const res = await app.request('/api/v1/db/articles/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: anonKey },
+        body: JSON.stringify({
+          select: ['id', 'title'],
+          where: [
+            { field: 'title', op: 'ilike', value: '%tech%' },
+            { field: 'id', op: 'is_not_null' },
+          ],
+          limit: 1,
+          single: true,
+        }),
+      })
+      expect(res.status).toBe(200)
+      const json: any = await res.json()
+      expect(json.success).toBe(true)
+      expect(typeof json.data).toBe('object')
+      expect(Array.isArray(json.data)).toBe(false)
+      expect(json.data.title).toBeDefined()
+    })
+
+    it('Edge Functions Locais: GET /api/v1/functions lista funções locais com metadados', async () => {
+      const res = await app.request('/api/v1/functions')
+      expect(res.status).toBe(200)
+      const json: any = await res.json()
+      expect(json.success).toBe(true)
+      expect(Array.isArray(json.data)).toBe(true)
+      const names = json.data.map((f: any) => f.name)
+      expect(names).toContain('hello')
+      expect(names).toContain('health-check')
+    })
+
+    it('Edge Functions Locais: Invocação GET e POST de /api/v1/functions/hello', async () => {
+      // 1. Invocação GET com query param
+      const getRes = await app.request('/api/v1/functions/hello?name=EdgeTester')
+      expect(getRes.status).toBe(200)
+      const getJson: any = await getRes.json()
+      expect(getJson.success).toBe(true)
+      expect(getJson.data.greeting).toBe('Hello, EdgeTester!')
+      expect(getJson.data.function).toBe('hello')
+
+      // 2. Invocação POST com JSON payload
+      const postRes = await app.request('/api/v1/functions/hello', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'CloudflareWorker' }),
+      })
+      expect(postRes.status).toBe(200)
+      const postJson: any = await postRes.json()
+      expect(postJson.success).toBe(true)
+      expect(postJson.data.greeting).toBe('Hello, CloudflareWorker!')
+    })
+
+    it('Edge Functions Locais: Invocação de /api/v1/functions/health-check retorna status', async () => {
+      const res = await app.request('/api/v1/functions/health-check')
+      expect(res.status).toBe(200)
+      const json: any = await res.json()
+      expect(json.success).toBe(true)
+      expect(json.data.status).toBe('healthy')
+      expect(json.data.function).toBe('health-check')
+    })
+
+    it('Edge Functions Locais: Função inexistente retorna HTTP 404', async () => {
+      const res = await app.request('/api/v1/functions/funcao_que_nao_existe')
+      expect(res.status).toBe(404)
+      const json: any = await res.json()
+      expect(json.success).toBe(false)
+      expect(json.error.code).toBe('FUNCTION_NOT_FOUND')
+    })
+
+    it('Tipagem Automática: GET /api/v1/admin/schema/types gera definições TypeScript', async () => {
+      const res = await app.request('/api/v1/admin/schema/types', {
+        headers: { Cookie: adminCookie },
+      })
+      expect(res.status).toBe(200)
+      const json: any = await res.json()
+      expect(json.success).toBe(true)
+      expect(json.data.typescript).toContain('export interface DatabaseSchema')
+      expect(json.data.typescript).toContain('articlesRow')
+      expect(json.data.typescript).toContain('articlesInsert')
+      expect(json.data.typescript).toContain('articlesUpdate')
+    })
+  })
 })

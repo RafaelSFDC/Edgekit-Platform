@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Table, Terminal, Shield, Lock } from 'lucide-react';
+import { Table, Sparkles, Shield, Lock } from 'lucide-react';
 import { useI18n } from '../i18n/context';
 import {
   useTablesQuery,
@@ -8,7 +8,6 @@ import {
   useUpdateTableRowMutation,
   useTablePolicyQuery,
   useUpdateTablePolicyMutation,
-  useRunSqlMutation,
   useInsertTableRowMutation,
   useCreateTableMutation,
   useDropTableMutation,
@@ -22,7 +21,7 @@ import { TableListSidebar } from '../components/database/TableListSidebar';
 import { TableDataGrid } from '../components/database/TableDataGrid';
 import { TablePolicyTab } from '../components/database/TablePolicyTab';
 import { TableApiSnippets } from '../components/database/TableApiSnippets';
-import { SqlRunnerTab } from '../components/database/SqlRunnerTab';
+import { QueryBuilderTab } from '../components/database/QueryBuilderTab';
 import { CreateTableDialog } from '../components/database/CreateTableDialog';
 import { DropTableDialog } from '../components/database/DropTableDialog';
 import type { TablePolicy } from '../types';
@@ -57,7 +56,7 @@ const SYSTEM_TABLES = new Set([
 
 export const DatabasePage: React.FC = () => {
   const { t } = useI18n();
-  const [activeMainTab, setActiveMainTab] = useState<'explorer' | 'sql'>('explorer');
+  const [activeMainTab, setActiveMainTab] = useState<'explorer' | 'query-builder'>('explorer');
   const [tableSubTab, setTableSubTab] = useState<'data' | 'rls' | 'api'>('data');
   const [selectedTable, setSelectedTable] = useState<string>('');
 
@@ -79,7 +78,6 @@ export const DatabasePage: React.FC = () => {
   const createTableMutation = useCreateTableMutation();
   const dropTableMutation = useDropTableMutation();
   const updatePolicyMutation = useUpdateTablePolicyMutation();
-  const runSqlMutation = useRunSqlMutation();
 
   const isCurrentSystemTable = SYSTEM_TABLES.has(currentTable.toLowerCase());
 
@@ -145,13 +143,13 @@ export const DatabasePage: React.FC = () => {
               <span>{t.database.dataExplorer}</span>
             </Button>
             <Button
-              variant={activeMainTab === 'sql' ? 'default' : 'ghost'}
+              variant={activeMainTab === 'query-builder' ? 'default' : 'ghost'}
               size="sm"
-              onClick={() => setActiveMainTab('sql')}
+              onClick={() => setActiveMainTab('query-builder')}
               className="text-xs h-7.5 cursor-pointer gap-1.5"
             >
-              <Terminal className="size-3.5" />
-              <span>{t.database.sqlRunner}</span>
+              <Sparkles className="size-3.5 text-orange-400" />
+              <span>Query Builder</span>
             </Button>
           </div>
         }
@@ -268,7 +266,12 @@ export const DatabasePage: React.FC = () => {
         </div>
       ) : (
         <div className="h-[calc(100vh-210px)] min-h-[550px]">
-          <SqlRunnerTab onRunSql={(sql) => runSqlMutation.mutateAsync(sql)} />
+          <QueryBuilderTab
+            tables={tables}
+            selectedTable={currentTable}
+            onSelectTable={handleSelectTable}
+            availableColumns={rows.length > 0 ? Object.keys(rows[0]) : ['id']}
+          />
         </div>
       )}
 

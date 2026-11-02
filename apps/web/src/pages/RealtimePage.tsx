@@ -14,8 +14,10 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { RealtimeChannelInspector } from '../components/realtime/RealtimeChannelInspector';
 import { WebhooksManagerTab } from '../components/realtime/WebhooksManagerTab';
+import { FunctionsManagerTab } from '../components/functions/FunctionsManagerTab';
+import { Code2 } from 'lucide-react';
 
-type RealtimeActiveTab = 'stream' | 'webhooks';
+type RealtimeActiveTab = 'stream' | 'webhooks' | 'functions';
 
 export const RealtimePage: React.FC = () => {
   const { t } = useI18n();
@@ -51,6 +53,16 @@ export const RealtimePage: React.FC = () => {
               >
                 <Webhook className="size-3.5" />
                 <span>Webhooks HTTP</span>
+              </Button>
+
+              <Button
+                variant={activeTab === 'functions' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setActiveTab('functions')}
+                className="text-xs h-7.5 cursor-pointer gap-1.5"
+              >
+                <Code2 className="size-3.5" />
+                <span>Edge Functions</span>
               </Button>
             </div>
 
@@ -110,6 +122,7 @@ export const RealtimePage: React.FC = () => {
       )}
 
       {activeTab === 'webhooks' && <WebhooksManagerTab />}
+      {activeTab === 'functions' && <FunctionsManagerTab />}
     </PageLayout>
   );
 };
