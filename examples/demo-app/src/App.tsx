@@ -3,14 +3,15 @@ import { AuthCard } from './components/AuthCard'
 import { DatabaseDemo } from './components/DatabaseDemo'
 import { StorageDemo } from './components/StorageDemo'
 import { RealtimeDemo } from './components/RealtimeDemo'
+import { ConsumerAuditSuite } from './components/ConsumerAuditSuite'
 import { DEFAULT_ANON_KEY, updateClientCredentials } from './lib/edgekit'
-import { Layers, Key, ExternalLink, ShieldCheck, Zap, Server } from 'lucide-react'
+import { Layers, Key, ExternalLink, ShieldCheck, Zap, Server, ShieldAlert } from 'lucide-react'
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<any>(null)
   const [anonKey, setAnonKey] = useState(DEFAULT_ANON_KEY)
   const [showKeyConfig, setShowKeyConfig] = useState(false)
-  const [activeTab, setActiveTab] = useState<'all' | 'db' | 'storage' | 'realtime'>('all')
+  const [activeTab, setActiveTab] = useState<'all' | 'db' | 'storage' | 'realtime' | 'audit'>('all')
 
   useEffect(() => {
     // Tenta carregar anonKey da configuração pública da API se não estiver customizada
@@ -186,37 +187,51 @@ export default function App() {
             >
               Realtime
             </button>
+            <button
+              onClick={() => setActiveTab('audit')}
+              className={`px-3 py-1 rounded-lg font-medium transition-all flex items-center gap-1.5 ${
+                activeTab === 'audit' ? 'bg-orange-600 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              <ShieldAlert className="w-3.5 h-3.5 text-orange-300" />
+              <span>Auditoria & Edge-Cases</span>
+            </button>
           </div>
         </div>
 
-        {/* Grid de Serviços */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Coluna 1: Autenticação (Better Auth) */}
-          <div className="lg:col-span-1">
-            <AuthCard user={currentUser} onUserChange={setCurrentUser} />
-          </div>
+        {/* View da Auditoria Completa */}
+        {activeTab === 'audit' ? (
+          <ConsumerAuditSuite />
+        ) : (
+          /* Grid de Serviços */
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Coluna 1: Autenticação (Better Auth) */}
+            <div className="lg:col-span-1">
+              <AuthCard user={currentUser} onUserChange={setCurrentUser} />
+            </div>
 
-          {/* Coluna 2 e 3: Serviços Interativos do Backend */}
-          <div className="lg:col-span-2 space-y-6">
-            {(activeTab === 'all' || activeTab === 'db') && (
-              <DatabaseDemo user={currentUser} />
-            )}
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {(activeTab === 'all' || activeTab === 'storage') && (
-                <div className={activeTab === 'storage' ? 'md:col-span-2' : ''}>
-                  <StorageDemo user={currentUser} />
-                </div>
+            {/* Coluna 2 e 3: Serviços Interativos do Backend */}
+            <div className="lg:col-span-2 space-y-6">
+              {(activeTab === 'all' || activeTab === 'db') && (
+                <DatabaseDemo user={currentUser} />
               )}
 
-              {(activeTab === 'all' || activeTab === 'realtime') && (
-                <div className={activeTab === 'realtime' ? 'md:col-span-2' : ''}>
-                  <RealtimeDemo user={currentUser} />
-                </div>
-              )}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {(activeTab === 'all' || activeTab === 'storage') && (
+                  <div className={activeTab === 'storage' ? 'md:col-span-2' : ''}>
+                    <StorageDemo user={currentUser} />
+                  </div>
+                )}
+
+                {(activeTab === 'all' || activeTab === 'realtime') && (
+                  <div className={activeTab === 'realtime' ? 'md:col-span-2' : ''}>
+                    <RealtimeDemo user={currentUser} />
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </main>
 
       {/* Footer */}

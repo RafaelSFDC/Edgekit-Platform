@@ -23,26 +23,26 @@ export const TableApiSnippets: React.FC<TableApiSnippetsProps> = ({
     const wsUrl = originUrl.replace(/^http/, 'ws');
 
     return {
-      sdk: `// Instale o cliente: npm i @edgekit/client
-import { createClient } from '@edgekit/client';
+      sdk: `// Instale o cliente oficial: pnpm add @edgekit/platform-client
+import { createClient } from '@edgekit/platform-client';
 
 const edgekit = createClient({
-  baseUrl: '${originUrl}',
-  apiKey: '${anonKey}',
+  url: '${originUrl}',
+  key: '${anonKey}',
 });
 
 // 1. Consultar com filtros avançados
-const { data, count, error } = await edgekit
+const { data, meta, error } = await edgekit
   .from('${tableName}')
   .select('*')
-  .filter('status', 'in', ['active', 'pending'])
   .order('created_at', { ascending: false })
   .limit(20);
 
-// 2. Inserir registro (user_id é associado automaticamente pelo RLS)
-const { data: created } = await edgekit
+// 2. Inserir registro com retorno dos dados criados
+const { data: created, error: insertError } = await edgekit
   .from('${tableName}')
-  .insert({ title: 'Exemplo' });`,
+  .insert({ title: 'Exemplo' })
+  .select();`,
 
       select: `// Consultar registros com filtros e ordenação via Fetch
 const res = await fetch('${originUrl}/api/v1/db/${tableName}?limit=20&order=created_at.desc', {
@@ -101,19 +101,21 @@ const res = await fetch('${originUrl}/api/v1/db/${tableName}/RECORD_ID', {
 const result = await res.json();
 console.log('Registro removido com sucesso!');`,
 
-      realtime: `// Escutar eventos CDC em tempo real via WebSocket nativo
-const ws = new WebSocket(
-  '${wsUrl}/api/v1/realtime/db:${tableName}/ws?apikey=${anonKey}'
-);
+      realtime: `// Escutar eventos CDC em tempo real via Edgekit Client SDK
+const channel = edgekit
+  .from('${tableName}')
+  .on('*', (payload) => {
+    console.log('Evento CDC recebido:', payload);
+  });
 
+// Ou via WebSocket multiplexado nativo:
+const ws = new WebSocket('${wsUrl}/api/v1/realtime/ws?apikey=${anonKey}');
 ws.onopen = () => {
-  console.log('⚡ Conectado ao canal em tempo real de ${tableName}');
+  ws.send(JSON.stringify({ action: 'subscribe', channel: 'db:${tableName}' }));
 };
-
 ws.onmessage = (event) => {
   const { event: action, payload } = JSON.parse(event.data);
-  // action pode ser 'INSERT', 'UPDATE' ou 'DELETE'
-  console.log('Evento CDC recebido:', action, payload);
+  console.log('Evento recebido:', action, payload);
 };`,
     };
   }, [tableName, anonKey, originUrl]);

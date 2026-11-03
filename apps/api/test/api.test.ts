@@ -1474,6 +1474,13 @@ describe('Edgekit Platform — Fundação, Segurança & Identidade Dupla (Fase 1
       })
       expect(createRes.status).toBe(201)
 
+      // 1.1. Valida Foreign Key no schema
+      const schemaRes = await app.request('/api/v1/admin/tables/post_reviews/schema', { headers: { Cookie: adminCookie } })
+      expect(schemaRes.status).toBe(200)
+      const schemaJson: any = await schemaRes.json()
+      expect(schemaJson.data.foreignKeys.length).toBeGreaterThan(0)
+      expect(schemaJson.data.foreignKeys[0].targetTable).toBe('users')
+
       // 2. Define política pública para leitura
       await app.request('/api/v1/admin/tables/post_reviews/policy', {
         method: 'PUT',

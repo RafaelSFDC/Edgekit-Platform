@@ -756,10 +756,11 @@ adminRoutes.post('/tables', requireAdmin(), async (c) => {
 
     colDefinitions.push(def)
 
-    if (col.relation && typeof col.relation === 'object') {
-      const targetTable = (col.relation.targetTable || '').trim()
-      const targetCol = (col.relation.targetColumn || 'id').trim()
-      const onDelete = (col.relation.onDelete || 'CASCADE').toUpperCase()
+    const rel = col.relation || col.references
+    if (rel && typeof rel === 'object') {
+      const targetTable = (rel.targetTable || rel.table || '').trim()
+      const targetCol = (rel.targetColumn || rel.column || 'id').trim()
+      const onDelete = (rel.onDelete || 'CASCADE').toUpperCase()
       const validActions = new Set(['CASCADE', 'SET NULL', 'RESTRICT', 'NO ACTION'])
       const safeAction = validActions.has(onDelete) ? onDelete : 'CASCADE'
 

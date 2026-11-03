@@ -1,10 +1,13 @@
 /* eslint-disable unicorn/no-thenable */
 export interface EdgekitClientOptions {
-  url: string
+  url?: string
+  baseUrl?: string
   key?: string
+  apiKey?: string
   anonKey?: string
   serviceRoleKey?: string
   token?: string
+  cookie?: string
   credentials?: 'include' | 'omit' | 'same-origin'
   fetch?: typeof fetch
 }
@@ -79,8 +82,9 @@ export interface RealtimeChannel {
 }
 
 export function createEdgekitClient(options: EdgekitClientOptions) {
-  const baseUrl = options.url.replace(/\/+$/, '')
-  const apiKey = options.key || options.serviceRoleKey || options.anonKey || ''
+  const rawUrl = options.url || options.baseUrl || ''
+  const baseUrl = rawUrl.replace(/\/+$/, '')
+  const apiKey = options.key || options.apiKey || options.serviceRoleKey || options.anonKey || ''
   const customFetch = options.fetch || globalThis.fetch
   const fetchCredentials = options.credentials || 'include'
 
@@ -92,15 +96,28 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
     headers['Authorization'] = `Bearer ${apiKey}`
   }
   if (options.token) {
-    headers['Authorization'] = `Bearer ${options.token}`
+    if (options.token.startsWith('better-auth.') || options.token.includes('=')) {
+      headers['Cookie'] = options.token
+    } else {
+      headers['Authorization'] = `Bearer ${options.token}`
+    }
+  }
+  if (options.cookie) {
+    headers['Cookie'] = options.cookie
   }
 
   function setToken(token: string | null) {
     if (token) {
-      headers['Authorization'] = `Bearer ${token}`
+      if (token.startsWith('better-auth.') || token.includes('=')) {
+        headers['Cookie'] = token
+      } else {
+        headers['Authorization'] = `Bearer ${token}`
+      }
     } else if (apiKey) {
+      delete headers['Cookie']
       headers['Authorization'] = `Bearer ${apiKey}`
     } else {
+      delete headers['Cookie']
       delete headers['Authorization']
     }
   }
@@ -391,7 +408,16 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
 
           if (isSingle) {
             const rows = json.data
-            if (!Array.isArray(rows) || rows.length === 0) {
+            if (!rows) {
+              return {
+                data: null,
+                error: new Error('JSON object requested, multiple (or no) rows returned'),
+              }
+            }
+            if (!Array.isArray(rows)) {
+              return { data: rows, error: null }
+            }
+            if (rows.length === 0) {
               return {
                 data: null,
                 error: new Error('JSON object requested, multiple (or no) rows returned'),
