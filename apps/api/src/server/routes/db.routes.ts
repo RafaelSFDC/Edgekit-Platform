@@ -788,9 +788,9 @@ async function executeBatchQueries(db: AppDatabase, queries: SQL[]): Promise<any
   if (typeof (db as any).batch === 'function') {
     return await (db as any).batch(queries)
   }
-  const results: any[] = []
   if (typeof (db as any).transaction === 'function') {
-    ;(db as any).transaction((tx: any) => {
+    return (db as any).transaction((tx: any) => {
+      const results: any[] = []
       for (const q of queries) {
         try {
           results.push(tx.all(q))
@@ -798,17 +798,29 @@ async function executeBatchQueries(db: AppDatabase, queries: SQL[]): Promise<any
           results.push(tx.run(q))
         }
       }
+      return results
     })
-    return results
   }
-  for (const q of queries) {
-    try {
-      results.push(await db.all(q))
-    } catch {
-      results.push(await db.run(q))
+
+  // Fallback atômico SQLite via BEGIN TRANSACTION / COMMIT / ROLLBACK
+  await db.run(sql.raw('BEGIN TRANSACTION'))
+  try {
+    const results: any[] = []
+    for (const q of queries) {
+      try {
+        results.push(await db.all(q))
+      } catch {
+        results.push(await db.run(q))
+      }
     }
+    await db.run(sql.raw('COMMIT'))
+    return results
+  } catch (err) {
+    try {
+      await db.run(sql.raw('ROLLBACK'))
+    } catch {}
+    throw err
   }
-  return results
 }
 
 // Mutações Atômicas Transacionais em Lote (Batch API com db.batch e Anti-Hijack Guardrail)

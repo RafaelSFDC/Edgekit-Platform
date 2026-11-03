@@ -8,6 +8,7 @@ import {
   ekAdmins,
   ekAdminSessions,
   ekApiKeys,
+  ekStorageBuckets,
   ekStorageObjects,
   users,
   sessions,
@@ -18,6 +19,7 @@ import {
   ekSettings,
 } from '../db/schema'
 import { getBindings } from '../env'
+import { getAuth } from '../auth'
 import { requireAdmin } from '../auth/middleware'
 import {
   hashPassword,
@@ -236,6 +238,8 @@ adminRoutes.post('/login', async (c) => {
         401,
       )
     }
+
+    invalidateTableColumnsCache()
 
     return c.json({
       success: true,
@@ -1347,4 +1351,217 @@ adminRoutes.delete('/organizations/:id/members/:userId', requireAdmin(), async (
     .where(sql`${members.organizationId} = ${orgId} AND ${members.userId} = ${userId}`)
 
   return c.json({ success: true, message: 'Membro removido da organização.' })
+})
+
+// Seed Demo / Dev: Provisiona schema relacional e dados de exemplo para o TaskFlow Pro
+adminRoutes.post('/seed-demo', async (c) => {
+  const db = await getDb()
+  const body = await c.req.json().catch(() => ({}))
+  const reset = Boolean(body.reset)
+
+  try {
+    let cols: any[] = []
+    try {
+      cols = await db.all(sql`PRAGMA table_info(tasks)`)
+    } catch {}
+    const hasPriority = cols.some((col: any) => col.name === 'priority')
+    if (reset || (cols.length > 0 && !hasPriority)) {
+      await db.run(sql`DROP TABLE IF EXISTS comments`)
+      await db.run(sql`DROP TABLE IF EXISTS tasks`)
+      await db.run(sql`DROP TABLE IF EXISTS projects`)
+    }
+
+    // 1. Cria tabela projects
+    await db.run(sql`
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        color TEXT DEFAULT '#f97316',
+        user_id TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    `)
+
+    // 2. Cria tabela tasks com FK para projects
+    await db.run(sql`
+      CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY,
+        project_id TEXT,
+        user_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        priority INTEGER DEFAULT 1,
+        status TEXT DEFAULT 'pending',
+        due_date TEXT,
+        completed INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
+      )
+    `)
+
+    // 3. Cria tabela comments com FK para tasks
+    await db.run(sql`
+      CREATE TABLE IF NOT EXISTS comments (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+      )
+    `)
+
+    // 4. Configura políticas em _ek_table_policies
+    const now = new Date()
+    const tablesToProtect = ['projects', 'tasks', 'comments']
+    for (const t of tablesToProtect) {
+      const existing = await db.select().from(ekTablePolicies).where(eq(ekTablePolicies.tableName, t)).get()
+      if (!existing) {
+        await db.insert(ekTablePolicies).values({
+          id: nanoid(),
+          tableName: t,
+          rlsEnabled: true,
+          selectRule: 'public',
+          insertRule: 'authenticated',
+          updateRule: 'owner',
+          deleteRule: 'owner',
+          ownerColumn: 'user_id',
+          createdAt: now,
+          updatedAt: now,
+        })
+      }
+    }
+
+    // 5. Configura buckets em _ek_storage_buckets
+    const existingAvatarBucket = await db.select().from(ekStorageBuckets).where(eq(ekStorageBuckets.name, 'avatars')).get()
+    if (!existingAvatarBucket) {
+      await db.insert(ekStorageBuckets).values({
+        id: 'avatars',
+        name: 'avatars',
+        isPublic: true,
+        maxSizeBytes: 2097152, // 2MB
+        allowedMimeTypes: JSON.stringify(['image/png', 'image/jpeg', 'image/webp', 'image/gif']),
+        readRule: 'public',
+        writeRule: 'authenticated',
+        createdAt: now,
+        updatedAt: now,
+      })
+    }
+
+    const existingDocsBucket = await db.select().from(ekStorageBuckets).where(eq(ekStorageBuckets.name, 'project_docs')).get()
+    if (!existingDocsBucket) {
+      await db.insert(ekStorageBuckets).values({
+        id: 'project_docs',
+        name: 'project_docs',
+        isPublic: false,
+        maxSizeBytes: 5242880, // 5MB
+        allowedMimeTypes: JSON.stringify(['application/pdf', 'text/plain', 'image/png', 'image/jpeg']),
+        readRule: 'owner',
+        writeRule: 'authenticated',
+        createdAt: now,
+        updatedAt: now,
+      })
+    }
+
+    // 6. Garante usuários Alice e Bob cadastrados no Better Auth (com senha válida)
+    const auth = await getAuth()
+    let alice = await db.select().from(users).where(eq(users.email, 'alice@taskflow.local')).get()
+    if (alice) {
+      const aliceAcc = await db.select().from(accounts).where(eq(accounts.userId, alice.id)).get()
+      if (!aliceAcc) {
+        await db.delete(users).where(eq(users.id, alice.id))
+        alice = undefined
+      }
+    }
+    if (!alice) {
+      try {
+        const res = await auth.api.signUpEmail({
+          body: {
+            name: 'Alice (Product Manager)',
+            email: 'alice@taskflow.local',
+            password: 'Password123!',
+          },
+        })
+        alice = res?.user || (await db.select().from(users).where(eq(users.email, 'alice@taskflow.local')).get())
+      } catch {
+        alice = await db.select().from(users).where(eq(users.email, 'alice@taskflow.local')).get()
+      }
+    }
+
+    let bob = await db.select().from(users).where(eq(users.email, 'bob@taskflow.local')).get()
+    if (bob) {
+      const bobAcc = await db.select().from(accounts).where(eq(accounts.userId, bob.id)).get()
+      if (!bobAcc) {
+        await db.delete(users).where(eq(users.id, bob.id))
+        bob = undefined
+      }
+    }
+    if (!bob) {
+      try {
+        const res = await auth.api.signUpEmail({
+          body: {
+            name: 'Bob (Tech Lead)',
+            email: 'bob@taskflow.local',
+            password: 'Password123!',
+          },
+        })
+        bob = res?.user || (await db.select().from(users).where(eq(users.email, 'bob@taskflow.local')).get())
+      } catch {
+        bob = await db.select().from(users).where(eq(users.email, 'bob@taskflow.local')).get()
+      }
+    }
+
+    const aliceId = alice?.id || 'user_alice_taskflow'
+    const bobId = bob?.id || 'user_bob_taskflow'
+
+    // 7. Seed de Projetos (se tabela estiver vazia)
+    const existingProjects: any[] = await db.all(sql`SELECT count(*) as count FROM projects`)
+    if (!existingProjects?.[0]?.count || existingProjects[0].count === 0) {
+      await db.run(sql`
+        INSERT INTO projects (id, name, description, color, user_id) VALUES
+        ('proj_platform', 'Platform v2', 'Migração de BaaS para Cloudflare Workers, D1 e R2', '#f97316', ${aliceId}),
+        ('proj_mobile', 'Mobile App', 'Aplicativo React Native & SDK Isomórfico Edgekit', '#3b82f6', ${bobId})
+      `)
+    }
+
+    // 8. Seed de Tarefas (se tabela estiver vazia)
+    const existingTasks: any[] = await db.all(sql`SELECT count(*) as count FROM tasks`)
+    if (!existingTasks?.[0]?.count || existingTasks[0].count === 0) {
+      await db.run(sql`
+        INSERT INTO tasks (id, project_id, user_id, title, description, priority, status, completed) VALUES
+        ('task_1', 'proj_platform', ${aliceId}, 'Implementar WebSocket Hibernation no DO', 'Configurar serializeAttachment para persistência de presença com custo zero', 5, 'in_progress', 0),
+        ('task_2', 'proj_platform', ${aliceId}, 'Auditoria Zero-Trust de Origens', 'Garantir bloqueio de service_role vindo de domínios maliciosos ou navegadores externos', 4, 'completed', 1),
+        ('task_3', 'proj_mobile', ${bobId}, 'Testar SDK com React Native', 'Validar thenable/await e queries relacionais no cliente mobile', 3, 'pending', 0),
+        ('task_4', 'proj_mobile', ${bobId}, 'Configurar Range Requests HTTP 206', 'Streaming de mídia parcial no Storage R2', 2, 'pending', 0)
+      `)
+    }
+
+    // 9. Seed de Comentários (se tabela estiver vazia)
+    const existingComments: any[] = await db.all(sql`SELECT count(*) as count FROM comments`)
+    if (!existingComments?.[0]?.count || existingComments[0].count === 0) {
+      await db.run(sql`
+        INSERT INTO comments (id, task_id, user_id, content) VALUES
+        ('comm_1', 'task_1', ${bobId}, 'Já testei a hibernação no Miniflare local, reduziu o consumo de CPU a zero!'),
+        ('comm_2', 'task_1', ${aliceId}, 'Excelente! Vamos validar no Vitest e no browser agora.'),
+        ('comm_3', 'task_3', ${aliceId}, 'Lembre-se de verificar o autocomplete dos tipos gerados via db:typegen.')
+      `)
+    }
+
+    invalidateTableColumnsCache()
+
+    return c.json({
+      success: true,
+      message: 'Schema relacional e dados de demonstração provisionados com sucesso!',
+      data: {
+        projects: 2,
+        tasks: 4,
+        comments: 3,
+        users: ['alice@taskflow.local', 'bob@taskflow.local'],
+        buckets: ['avatars', 'project_docs'],
+      },
+    })
+  } catch (err: any) {
+    return c.json({ success: false, error: { message: err.message } }, 500)
+  }
 })

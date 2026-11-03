@@ -1,17 +1,40 @@
 import React, { useState, useEffect } from 'react'
-import { AuthCard } from './components/AuthCard'
-import { DatabaseDemo } from './components/DatabaseDemo'
+import { PersonaProvider, usePersona, PERSONAS } from './context/PersonaContext'
+import { RelationalBoard } from './components/RelationalBoard'
+import { AdvancedDataExplorer } from './components/AdvancedDataExplorer'
 import { StorageDemo } from './components/StorageDemo'
 import { RealtimeDemo } from './components/RealtimeDemo'
+import { ChaosStressLab } from './components/ChaosStressLab'
 import { ConsumerAuditSuite } from './components/ConsumerAuditSuite'
+import { ensureDemoSeed } from './lib/seed'
 import { DEFAULT_ANON_KEY, updateClientCredentials } from './lib/edgekit'
-import { Layers, Key, ExternalLink, ShieldCheck, Zap, Server, ShieldAlert } from 'lucide-react'
+import {
+  Layers,
+  Key,
+  ExternalLink,
+  ShieldCheck,
+  Zap,
+  Server,
+  FolderKanban,
+  Database,
+  FolderUp,
+  Radio,
+  Flame,
+  CheckCircle2,
+  RefreshCw,
+  Sparkles,
+  UserCheck,
+} from 'lucide-react'
 
-export default function App() {
-  const [currentUser, setCurrentUser] = useState<any>(null)
+type TabType = 'board' | 'explorer' | 'storage' | 'realtime' | 'chaos' | 'audit'
+
+function AppContent() {
+  const { activePersona, switchPersona, isSwitching, currentUser } = usePersona()
+  const [activeTab, setActiveTab] = useState<TabType>('board')
   const [anonKey, setAnonKey] = useState(DEFAULT_ANON_KEY)
   const [showKeyConfig, setShowKeyConfig] = useState(false)
-  const [activeTab, setActiveTab] = useState<'all' | 'db' | 'storage' | 'realtime' | 'audit'>('all')
+  const [isSeeding, setIsSeeding] = useState(false)
+  const [seedNotice, setSeedNotice] = useState<string | null>(null)
 
   useEffect(() => {
     // Tenta carregar anonKey da configuração pública da API se não estiver customizada
@@ -31,6 +54,27 @@ export default function App() {
       .catch(() => {})
   }, [])
 
+  const handleRunSeed = async (reset = false) => {
+    setIsSeeding(true)
+    try {
+      const res = await ensureDemoSeed({ reset })
+      if (res.success) {
+        setSeedNotice(reset ? 'Banco resetado e dados de exemplo recriados!' : 'Dados de exemplo garantidos!')
+        setTimeout(() => setSeedNotice(null), 4000)
+        // Recarrega persona atual
+        await switchPersona(activePersona.id)
+      } else {
+        setSeedNotice(`Falha no seed: ${res.message}`)
+        setTimeout(() => setSeedNotice(null), 5000)
+      }
+    } catch (err: any) {
+      setSeedNotice(`Erro: ${err.message}`)
+      setTimeout(() => setSeedNotice(null), 5000)
+    } finally {
+      setIsSeeding(false)
+    }
+  }
+
   function handleSaveKey(e: React.FormEvent) {
     e.preventDefault()
     updateClientCredentials(anonKey)
@@ -42,204 +86,223 @@ export default function App() {
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans">
       {/* Top Navbar */}
       <header className="border-b border-zinc-800/80 bg-zinc-900/60 backdrop-blur-md sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-4">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-4">
+          {/* Logo e Título */}
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-orange-600 flex items-center justify-center text-white font-bold shadow-lg shadow-orange-600/30">
-              <Layers className="w-5 h-5" />
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 to-amber-600 flex items-center justify-center text-zinc-950 font-bold shadow-lg shadow-orange-500/20">
+              <Layers className="w-6 h-6 text-zinc-950" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="font-bold text-base tracking-tight text-white">Edgekit Platform</h1>
+                <h1 className="font-extrabold text-base tracking-tight text-white">TaskFlow Pro</h1>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-orange-500/10 text-orange-400 border border-orange-500/20">
-                  Demo Consumer App
+                  Consumer Reference App
                 </span>
               </div>
               <p className="text-xs text-zinc-400">
-                Frontend Mock de Testes consumindo Better Auth, SDK & Durable Objects
+                Aplicação cliente de referência consumindo Edgekit SDK (D1, R2 & Durable Objects)
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5 text-xs">
+          {/* Persona Switcher & Ações */}
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Persona Switcher */}
+            <div className="flex items-center bg-zinc-950 p-1 rounded-xl border border-zinc-800 text-xs">
+              <span className="text-[11px] text-zinc-500 px-2 font-medium hidden sm:inline">Persona:</span>
+              <button
+                onClick={() => switchPersona('alice')}
+                disabled={isSwitching}
+                className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center gap-1.5 ${
+                  activePersona.id === 'alice'
+                    ? 'bg-orange-500 text-zinc-950 font-bold shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+                title="Alternar para Alice (Product Manager)"
+              >
+                <span>👩</span>
+                <span>Alice (PM)</span>
+              </button>
+              <button
+                onClick={() => switchPersona('bob')}
+                disabled={isSwitching}
+                className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center gap-1.5 ${
+                  activePersona.id === 'bob'
+                    ? 'bg-blue-600 text-white font-bold shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+                title="Alternar para Bob (Tech Lead)"
+              >
+                <span>👨</span>
+                <span>Bob (Dev)</span>
+              </button>
+              <button
+                onClick={() => switchPersona('anon')}
+                disabled={isSwitching}
+                className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center gap-1.5 ${
+                  activePersona.id === 'anon'
+                    ? 'bg-zinc-700 text-zinc-100 font-bold shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+                title="Deslogar e navegar como visitante anônimo"
+              >
+                <span>👤</span>
+                <span>Anônimo</span>
+              </button>
+            </div>
+
+            {/* Botão de Seed / Reset */}
             <button
-              onClick={() => setShowKeyConfig(!showKeyConfig)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 transition-colors"
+              onClick={() => handleRunSeed(false)}
+              disabled={isSeeding}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 text-xs transition"
+              title="Garante tabelas, relacionamentos e dados no banco SQLite/D1"
             >
-              <Key className="w-3.5 h-3.5 text-orange-400" />
-              <span>Chave Anon: <code className="text-zinc-400">{anonKey.slice(0, 12)}...</code></span>
+              <RefreshCw className={`w-3.5 h-3.5 text-orange-400 ${isSeeding ? 'animate-spin' : ''}`} />
+              <span className="hidden md:inline">{isSeeding ? 'Provisionando...' : 'Seed Demo'}</span>
             </button>
 
+            {/* Links Externos */}
             <a
               href="http://localhost:5173"
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 text-xs transition"
               title="Abrir Studio de Administração da Infraestrutura"
             >
               <Server className="w-3.5 h-3.5 text-blue-400" />
-              <span>Admin Studio</span>
-              <ExternalLink className="w-3 h-3 text-zinc-500" />
-            </a>
-
-            <a
-              href="http://localhost:8787/docs"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 transition-colors"
-            >
-              <Zap className="w-3.5 h-3.5 text-yellow-400" />
-              <span>Scalar Docs</span>
+              <span className="hidden md:inline">Studio</span>
               <ExternalLink className="w-3 h-3 text-zinc-500" />
             </a>
           </div>
         </div>
       </header>
 
-      {/* Modal / Dropdown Configurar Chave */}
-      {showKeyConfig && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 w-full pt-4">
-          <form
-            onSubmit={handleSaveKey}
-            className="p-4 rounded-xl bg-zinc-900 border border-orange-500/30 flex flex-wrap items-center gap-3"
-          >
-            <div className="flex-1 min-w-[280px]">
-              <label htmlFor="anon-key-input" className="block text-xs font-medium text-zinc-300 mb-1">
-                Configurar Chave Anônima Pública (`EDGEKIT_ANON_KEY`):
-              </label>
-              <input
-                id="anon-key-input"
-                type="text"
-                value={anonKey}
-                onChange={(e) => setAnonKey(e.target.value.trim())}
-                placeholder="ek_anon_..."
-                className="w-full px-3 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs font-mono text-zinc-100 focus:outline-none focus:border-orange-500"
-              />
-            </div>
-            <div className="flex items-end gap-2 pt-4">
-              <button
-                type="submit"
-                className="px-4 py-1.5 bg-orange-600 hover:bg-orange-500 text-white rounded-lg text-xs font-medium transition-colors"
-              >
-                Salvar Chave
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowKeyConfig(false)}
-                className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-medium transition-colors"
-              >
-                Fechar
-              </button>
-            </div>
-          </form>
+      {/* Banner de Feedback do Seed */}
+      {seedNotice && (
+        <div className="bg-orange-500/10 border-b border-orange-500/20 px-4 py-2 text-center text-xs text-orange-300 flex items-center justify-center gap-2">
+          <Sparkles className="w-3.5 h-3.5 text-orange-400" />
+          <span>{seedNotice}</span>
         </div>
       )}
 
-      {/* Main Content Area */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex-1 w-full space-y-6">
-        {/* Banner Informativo */}
-        <div className="p-4 rounded-2xl bg-gradient-to-r from-orange-950/30 via-zinc-900 to-zinc-900 border border-orange-500/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="flex items-start gap-3">
-            <div className="p-2 rounded-xl bg-orange-500/10 text-orange-400 shrink-0 mt-0.5">
-              <ShieldCheck className="w-5 h-5" />
-            </div>
-            <div>
-              <h2 className="text-sm font-semibold text-zinc-200">
-                Isolamento Zero-Trust: 1 Deploy = 1 Backend de Produto
-              </h2>
-              <p className="text-xs text-zinc-400 mt-0.5">
-                Este app simula o frontend do seu produto consumindo o SDK oficial. Usuários criados aqui
-                pertencem à tabela <code className="text-orange-400 font-mono">users</code> e não têm
-                nenhum acesso ao painel de administração da plataforma.
-              </p>
-            </div>
+      {/* Sub-header com Abas de Navegação */}
+      <nav className="border-b border-zinc-800 bg-zinc-950/60 sticky top-[65px] z-40 backdrop-blur-md">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center gap-1 overflow-x-auto py-2 scrollbar-none">
+          <button
+            onClick={() => setActiveTab('board')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
+              activeTab === 'board'
+                ? 'bg-zinc-800 text-orange-400 shadow-sm border border-zinc-700/80'
+                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
+            }`}
+          >
+            <FolderKanban className="w-4 h-4" />
+            Quadro Relacional (.expand)
+          </button>
+
+          <button
+            onClick={() => setActiveTab('explorer')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
+              activeTab === 'explorer'
+                ? 'bg-zinc-800 text-indigo-400 shadow-sm border border-zinc-700/80'
+                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
+            }`}
+          >
+            <Database className="w-4 h-4" />
+            Data Explorer (Filtros & JSON)
+          </button>
+
+          <button
+            onClick={() => setActiveTab('storage')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
+              activeTab === 'storage'
+                ? 'bg-zinc-800 text-orange-400 shadow-sm border border-zinc-700/80'
+                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
+            }`}
+          >
+            <FolderUp className="w-4 h-4" />
+            Storage Hub (R2 & URLs Assinadas)
+          </button>
+
+          <button
+            onClick={() => setActiveTab('realtime')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
+              activeTab === 'realtime'
+                ? 'bg-zinc-800 text-emerald-400 shadow-sm border border-zinc-700/80'
+                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
+            }`}
+          >
+            <Radio className="w-4 h-4" />
+            Realtime Colaborativo & CDC
+          </button>
+
+          <button
+            onClick={() => setActiveTab('chaos')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
+              activeTab === 'chaos'
+                ? 'bg-zinc-800 text-rose-400 shadow-sm border border-zinc-700/80'
+                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
+            }`}
+          >
+            <Flame className="w-4 h-4" />
+            Chaos & Security Lab
+          </button>
+
+          <button
+            onClick={() => setActiveTab('audit')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
+              activeTab === 'audit'
+                ? 'bg-zinc-800 text-amber-400 shadow-sm border border-zinc-700/80'
+                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
+            }`}
+          >
+            <ShieldCheck className="w-4 h-4" />
+            Auditoria Automatizada (23 Testes)
+          </button>
+        </div>
+      </nav>
+
+      {/* Conteúdo da Aba Ativa */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex-1 w-full">
+        {activeTab === 'board' && <RelationalBoard />}
+        {activeTab === 'explorer' && <AdvancedDataExplorer />}
+        {activeTab === 'storage' && <StorageDemo />}
+        {activeTab === 'realtime' && <RealtimeDemo />}
+        {activeTab === 'chaos' && <ChaosStressLab />}
+        {activeTab === 'audit' && <ConsumerAuditSuite />}
+      </main>
+
+      {/* Rodapé Informativo */}
+      <footer className="border-t border-zinc-800/80 bg-zinc-900/30 text-xs text-zinc-500 py-6 mt-12">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <span className="font-semibold text-zinc-400">TaskFlow Pro</span>
+            <span>•</span>
+            <span>Cloudflare Workers, D1 (SQLite), R2 Storage & Durable Objects</span>
           </div>
 
-          <div className="flex gap-1.5 shrink-0 bg-zinc-950/70 p-1 rounded-xl border border-zinc-800 text-xs">
+          <div className="flex items-center gap-4 text-[11px]">
+            <span>Persona Ativa: <strong className="text-zinc-300">{activePersona.name} ({activePersona.title})</strong></span>
+            <span>•</span>
             <button
-              onClick={() => setActiveTab('all')}
-              className={`px-3 py-1 rounded-lg font-medium transition-all ${
-                activeTab === 'all' ? 'bg-orange-600 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
-              }`}
+              onClick={() => handleRunSeed(true)}
+              className="text-rose-400 hover:underline"
+              title="Limpa tabelas de tarefas e recria dados do zero"
             >
-              Todos os Serviços
-            </button>
-            <button
-              onClick={() => setActiveTab('db')}
-              className={`px-3 py-1 rounded-lg font-medium transition-all ${
-                activeTab === 'db' ? 'bg-orange-600 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              Database
-            </button>
-            <button
-              onClick={() => setActiveTab('storage')}
-              className={`px-3 py-1 rounded-lg font-medium transition-all ${
-                activeTab === 'storage' ? 'bg-orange-600 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              Storage
-            </button>
-            <button
-              onClick={() => setActiveTab('realtime')}
-              className={`px-3 py-1 rounded-lg font-medium transition-all ${
-                activeTab === 'realtime' ? 'bg-orange-600 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              Realtime
-            </button>
-            <button
-              onClick={() => setActiveTab('audit')}
-              className={`px-3 py-1 rounded-lg font-medium transition-all flex items-center gap-1.5 ${
-                activeTab === 'audit' ? 'bg-orange-600 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              <ShieldAlert className="w-3.5 h-3.5 text-orange-300" />
-              <span>Auditoria & Edge-Cases</span>
+              Resetar Banco Completo
             </button>
           </div>
         </div>
-
-        {/* View da Auditoria Completa */}
-        {activeTab === 'audit' ? (
-          <ConsumerAuditSuite />
-        ) : (
-          /* Grid de Serviços */
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Coluna 1: Autenticação (Better Auth) */}
-            <div className="lg:col-span-1">
-              <AuthCard user={currentUser} onUserChange={setCurrentUser} />
-            </div>
-
-            {/* Coluna 2 e 3: Serviços Interativos do Backend */}
-            <div className="lg:col-span-2 space-y-6">
-              {(activeTab === 'all' || activeTab === 'db') && (
-                <DatabaseDemo user={currentUser} />
-              )}
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {(activeTab === 'all' || activeTab === 'storage') && (
-                  <div className={activeTab === 'storage' ? 'md:col-span-2' : ''}>
-                    <StorageDemo user={currentUser} />
-                  </div>
-                )}
-
-                {(activeTab === 'all' || activeTab === 'realtime') && (
-                  <div className={activeTab === 'realtime' ? 'md:col-span-2' : ''}>
-                    <RealtimeDemo user={currentUser} />
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-      </main>
-
-      {/* Footer */}
-      <footer className="border-t border-zinc-800/80 py-4 text-center text-xs text-zinc-500">
-        <p>
-          Edgekit Platform • Ambiente de Desenvolvimento Local • Porta 5174
-        </p>
       </footer>
     </div>
+  )
+}
+
+export default function App() {
+  return (
+    <PersonaProvider>
+      <AppContent />
+    </PersonaProvider>
   )
 }

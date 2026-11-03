@@ -619,6 +619,17 @@ export function createEdgekitClient(options: EdgekitClientOptions) {
           const json: any = await res.json()
           return { data: json.data || [], error: !res.ok ? new Error(json.error?.message || 'List error') : null }
         },
+        async createSignedUrl(path: string, expiresInSeconds = 3600) {
+          const res = await customFetch(
+            `${baseUrl}/api/v1/storage/${bucket}/signed-url`,
+            req({
+              method: 'POST',
+              body: JSON.stringify({ key: path, expiresInSeconds, action: 'read' }),
+            }),
+          )
+          const json: any = await res.json()
+          return { data: json.data || null, error: !res.ok ? new Error(json.error?.message || 'Signed URL error') : null }
+        },
         getPublicUrl(path: string) {
           return {
             data: {

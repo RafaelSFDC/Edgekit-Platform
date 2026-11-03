@@ -596,4 +596,145 @@ describe('@edgekit/demo-app — Suíte de Testes E2E do Consumidor Real via SDK'
       expect(res.status).toBe(403)
     })
   })
+
+  // =========================================================================
+  // CENÁRIO 6: TaskFlow Pro — Relacionamentos (.expand), Batch & Storage SDK
+  // =========================================================================
+  describe('Cenário 6: TaskFlow Pro — Relacionamentos (.expand), Batch & Storage SDK', () => {
+    let aliceClient: any
+
+    it('Seed endpoint (POST /api/v1/admin/seed-demo) provisiona dados de referência', async () => {
+      const res = await app.request('/api/v1/admin/seed-demo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reset: true }),
+      })
+      const text = await res.text()
+      if (res.status !== 200) {
+        console.error('SEED ERROR:', text)
+      }
+      expect(res.status).toBe(200)
+      const json = JSON.parse(text)
+      expect(json.success).toBe(true)
+      expect(json.data.projects).toBeGreaterThanOrEqual(2)
+      expect(json.data.tasks).toBeGreaterThanOrEqual(4)
+      expect(json.data.comments).toBeGreaterThanOrEqual(3)
+    })
+
+    it('Alice autentica com sucesso com as credenciais padrão do TaskFlow Pro', async () => {
+      const loginRes = await app.request('/api/v1/auth/sign-in/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'alice@taskflow.local',
+          password: 'Password123!',
+        }),
+      })
+      expect(loginRes.status).toBe(200)
+      const json = await loginRes.json()
+      expect(json.token).toBeDefined()
+
+      aliceClient = createClient({
+        url: BASE_URL,
+        anonKey,
+        fetch: testFetch,
+      })
+      aliceClient.setToken(json.token)
+    })
+
+    it('Consulta SDK com .expand(["project_id", "user_id"]) resolve foreign keys automaticamente', async () => {
+      const { data, error } = await aliceClient
+        .from('tasks')
+        .select('*')
+        .expand(['project_id', 'user_id'])
+        .order('priority', { ascending: false })
+
+      expect(error).toBeNull()
+      expect(Array.isArray(data)).toBe(true)
+      expect(data.length).toBeGreaterThanOrEqual(4)
+
+      const firstTask = data[0]
+      expect(firstTask.title).toBeDefined()
+      expect(firstTask.expand).toBeDefined()
+      expect(firstTask.expand.project_id).toBeDefined()
+      expect(firstTask.expand.project_id.name).toBeDefined()
+      expect(firstTask.expand.user_id).toBeDefined()
+      expect(firstTask.expand.user_id.email).toBeDefined()
+    })
+
+    it('Filtros combinados (.ilike e .gte) no SDK executam com sucesso', async () => {
+      const { data, error } = await aliceClient
+        .from('tasks')
+        .select('*')
+        .ilike('title', '%WebSocket%')
+        .gte('priority', 3)
+
+      expect(error).toBeNull()
+      expect(Array.isArray(data)).toBe(true)
+      expect(data.length).toBe(1)
+      expect(data[0].title).toContain('WebSocket')
+    })
+
+    it('SDK Storage .createSignedUrl gera link efêmero assinado no bucket avatars', async () => {
+      // 1. Upload de avatar via client
+      const fakeBlob = new Blob(['avatar-image-binary-data'], { type: 'image/png' })
+      const fakeFile = new File([fakeBlob], 'alice_avatar.png', { type: 'image/png' })
+      const uploadRes = await aliceClient.storage.from('avatars').upload('alice_avatar.png', fakeFile)
+      expect(uploadRes.error).toBeNull()
+
+      // 2. Gera URL assinada via método do SDK
+      const signedRes = await aliceClient.storage.from('avatars').createSignedUrl('alice_avatar.png', 60)
+      expect(signedRes.error).toBeNull()
+      expect(signedRes.data?.url).toBeDefined()
+      expect(signedRes.data.url).toContain('sig=')
+    })
+
+    it('Transação em lote com erro sofre rollback total e não persiste registros órfãos', async () => {
+      const testTaskId = `rollback_task_${Date.now()}`
+
+      // Envia lote com 1 operação válida e 1 inválida (violação NOT NULL em title)
+      const res = await app.request('/api/v1/db/batch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: serviceKey,
+        },
+        body: JSON.stringify({
+          operations: [
+            {
+              type: 'insert',
+              table: 'tasks',
+              data: {
+                id: testTaskId,
+                title: 'Tarefa que deveria sofrer rollback',
+                user_id: 'user_alice_taskflow',
+              },
+            },
+            {
+              type: 'insert',
+              table: 'tasks',
+              data: {
+                id: `invalid_${Date.now()}`,
+                title: null, // Inválido: NOT NULL constraint no SQLite
+                user_id: 'user_alice_taskflow',
+              },
+            },
+          ],
+        }),
+      })
+
+      const batchResText = await res.text()
+      console.log('BATCH RESPONSE STATUS:', res.status, 'BODY:', batchResText)
+
+      // Batch deve retornar erro
+      expect(res.status).toBeGreaterThanOrEqual(400)
+
+      // Valida que o primeiro registro NÃO foi persistido (atomicidade/rollback)
+      const checkRes = await app.request(`/api/v1/db/tasks?id=eq.${testTaskId}`, {
+        headers: { apikey: serviceKey },
+      })
+      const checkJson = await checkRes.json()
+      expect(checkJson.data?.length || 0).toBe(0)
+    })
+  })
 })
