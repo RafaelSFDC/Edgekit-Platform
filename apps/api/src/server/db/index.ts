@@ -81,8 +81,20 @@ async function applyD1Migrations(db: AppDatabase) {
 let d1ReadyState: 'idle' | 'bootstrapping' | 'ready' = 'idle'
 let bootstrapPromise: Promise<void> | null = null
 
-function ensureD1Ready(db: AppDatabase): Promise<void> {
+async function ensureD1Ready(db: AppDatabase): Promise<void> {
   if (d1ReadyState === 'ready') {
+    return Promise.resolve()
+  }
+
+  // Otimização de Cold Start: Em produção na Cloudflare, as migrações DDL são gerenciadas
+  // pelo pipeline de deploy/CI (wrangler d1 migrations apply).
+  // Desonera o Worker de inspecionar tabelas e executar DDL a cada cold start.
+  const bindings = await getBindings()
+  const isProduction = bindings.ENVIRONMENT === 'production'
+  const autoMigrate = bindings.AUTO_MIGRATE === 'true'
+
+  if (isProduction && !autoMigrate) {
+    d1ReadyState = 'ready'
     return Promise.resolve()
   }
 

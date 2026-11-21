@@ -20,6 +20,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 
 export const SettingsPage: React.FC = () => {
@@ -312,16 +313,12 @@ export const SettingsPage: React.FC = () => {
                   Impede que clientes externos forjem origens locais (localhost/127.0.0.1) se não estiverem na mesma máquina.
                 </span>
               </div>
-              <label className="relative inline-flex items-center cursor-pointer" aria-label="Bloquear acessos de localhost de outros computadores">
-                <input
-                  type="checkbox"
-                  aria-label="Bloquear acessos de localhost de outros computadores"
-                  checked={blockExternalLocalhost}
-                  onChange={(e) => setBlockExternalLocalhost(e.target.checked)}
-                  className="sr-only peer"
-                />
-                <div className="w-9 h-5 bg-muted peer-focus:outline-hidden rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-border after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
-              </label>
+              <Switch
+                id="block-external-localhost"
+                checked={blockExternalLocalhost}
+                onCheckedChange={(checked) => setBlockExternalLocalhost(checked)}
+                aria-label="Bloquear acessos de localhost de outros computadores"
+              />
             </div>
 
             <div className="flex justify-end pt-2">

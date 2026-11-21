@@ -603,22 +603,137 @@ describe('@edgekit/demo-app — Suíte de Testes E2E do Consumidor Real via SDK'
   describe('Cenário 6: TaskFlow Pro — Relacionamentos (.expand), Batch & Storage SDK', () => {
     let aliceClient: any
 
-    it('Seed endpoint (POST /api/v1/admin/seed-demo) provisiona dados de referência', async () => {
+    it('Seed endpoint (POST /api/v1/admin/seed-demo) é rejeitado (404) e dados de referência são provisionados diretamente', async () => {
+      // 1. Confirma que a rota pública insegura foi desativada (HTTP 404)
       const res = await app.request('/api/v1/admin/seed-demo', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reset: true }),
       })
-      const text = await res.text()
-      if (res.status !== 200) {
-        console.error('SEED ERROR:', text)
+      expect(res.status).toBe(404)
+
+      // 2. Provisiona schema e dados de referência do TaskFlow Pro diretamente via DDL
+      const db = await getDb()
+      await db.run(sql`DROP TABLE IF EXISTS comments`)
+      await db.run(sql`DROP TABLE IF EXISTS tasks`)
+      await db.run(sql`DROP TABLE IF EXISTS projects`)
+
+      await db.run(sql`
+        CREATE TABLE IF NOT EXISTS projects (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT,
+          color TEXT DEFAULT '#f97316',
+          user_id TEXT NOT NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+      `)
+      await db.run(sql`
+        CREATE TABLE IF NOT EXISTS tasks (
+          id TEXT PRIMARY KEY,
+          project_id TEXT,
+          user_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          description TEXT,
+          priority INTEGER DEFAULT 1,
+          status TEXT DEFAULT 'pending',
+          due_date TEXT,
+          completed INTEGER DEFAULT 0,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
+        )
+      `)
+      await db.run(sql`
+        CREATE TABLE IF NOT EXISTS comments (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          content TEXT NOT NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        )
+      `)
+
+      const now = new Date()
+      for (const t of ['projects', 'tasks', 'comments']) {
+        const existing = await db.select().from(ekTablePolicies).where(sql`table_name = ${t}`).get()
+        if (!existing) {
+          await db.insert(ekTablePolicies).values({
+            id: `pol_${t}_${Date.now()}`,
+            tableName: t,
+            rlsEnabled: true,
+            selectRule: 'public',
+            insertRule: 'authenticated',
+            updateRule: 'owner',
+            deleteRule: 'owner',
+            ownerColumn: 'user_id',
+            createdAt: now,
+            updatedAt: now,
+          })
+        }
       }
-      expect(res.status).toBe(200)
-      const json = JSON.parse(text)
-      expect(json.success).toBe(true)
-      expect(json.data.projects).toBeGreaterThanOrEqual(2)
-      expect(json.data.tasks).toBeGreaterThanOrEqual(4)
-      expect(json.data.comments).toBeGreaterThanOrEqual(3)
+
+      const existingAvatarBucket = await db.select().from(ekStorageBuckets).where(sql`name = 'avatars'`).get()
+      if (!existingAvatarBucket) {
+        await db.insert(ekStorageBuckets).values({
+          id: 'avatars',
+          name: 'avatars',
+          isPublic: true,
+          maxSizeBytes: 2097152,
+          allowedMimeTypes: JSON.stringify(['image/png', 'image/jpeg', 'image/webp', 'image/gif']),
+          readRule: 'public',
+          writeRule: 'authenticated',
+          createdAt: now,
+          updatedAt: now,
+        })
+      }
+
+      const auth = await (await import('../../../apps/api/src/server/auth')).getAuth()
+      let alice = await db.select().from(users).where(sql`email = 'alice@taskflow.local'`).get()
+      if (!alice) {
+        try {
+          const r = await auth.api.signUpEmail({
+            body: { name: 'Alice (Product Manager)', email: 'alice@taskflow.local', password: 'Password123!' },
+          })
+          alice = r?.user || (await db.select().from(users).where(sql`email = 'alice@taskflow.local'`).get())
+        } catch {
+          alice = await db.select().from(users).where(sql`email = 'alice@taskflow.local'`).get()
+        }
+      }
+
+      let bob = await db.select().from(users).where(sql`email = 'bob@taskflow.local'`).get()
+      if (!bob) {
+        try {
+          const r = await auth.api.signUpEmail({
+            body: { name: 'Bob (Tech Lead)', email: 'bob@taskflow.local', password: 'Password123!' },
+          })
+          bob = r?.user || (await db.select().from(users).where(sql`email = 'bob@taskflow.local'`).get())
+        } catch {
+          bob = await db.select().from(users).where(sql`email = 'bob@taskflow.local'`).get()
+        }
+      }
+
+      const aliceId = alice?.id || 'user_alice_taskflow'
+      const bobId = bob?.id || 'user_bob_taskflow'
+
+      await db.run(sql`
+        INSERT INTO projects (id, name, description, color, user_id) VALUES
+        ('proj_platform', 'Platform v2', 'Migração de BaaS para Cloudflare Workers, D1 e R2', '#f97316', ${aliceId}),
+        ('proj_mobile', 'Mobile App', 'Aplicativo React Native & SDK Isomórfico Edgekit', '#3b82f6', ${bobId})
+      `)
+      await db.run(sql`
+        INSERT INTO tasks (id, project_id, user_id, title, description, priority, status, completed) VALUES
+        ('task_1', 'proj_platform', ${aliceId}, 'Implementar WebSocket Hibernation no DO', 'Configurar serializeAttachment para persistência de presença com custo zero', 5, 'in_progress', 0),
+        ('task_2', 'proj_platform', ${aliceId}, 'Auditoria Zero-Trust de Origens', 'Garantir bloqueio de service_role vindo de domínios maliciosos ou navegadores externos', 4, 'completed', 1),
+        ('task_3', 'proj_mobile', ${bobId}, 'Testar SDK com React Native', 'Validar thenable/await e queries relacionais no cliente mobile', 3, 'pending', 0),
+        ('task_4', 'proj_mobile', ${bobId}, 'Configurar Range Requests HTTP 206', 'Streaming de mídia parcial no Storage R2', 2, 'pending', 0)
+      `)
+      await db.run(sql`
+        INSERT INTO comments (id, task_id, user_id, content) VALUES
+        ('comm_1', 'task_1', ${bobId}, 'Já testei a hibernação no Miniflare local, reduziu o consumo de CPU a zero!'),
+        ('comm_2', 'task_1', ${aliceId}, 'Excelente! Vamos validar no Vitest e no browser agora.'),
+        ('comm_3', 'task_3', ${aliceId}, 'Lembre-se de verificar o autocomplete dos tipos gerados via db:typegen.')
+      `)
     })
 
     it('Alice autentica com sucesso com as credenciais padrão do TaskFlow Pro', async () => {

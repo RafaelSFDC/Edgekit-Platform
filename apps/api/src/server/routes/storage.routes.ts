@@ -257,7 +257,16 @@ storageRoutes.get('/:bucket/file/*', async (c) => {
 
   const result = await getFile(bucket, key, rangeParam)
   if (!result) {
-    return c.text('Arquivo não encontrado', 404)
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'FILE_NOT_FOUND',
+          message: 'Arquivo não encontrado',
+        },
+      },
+      404,
+    )
   }
 
   const headers: Record<string, string> = {

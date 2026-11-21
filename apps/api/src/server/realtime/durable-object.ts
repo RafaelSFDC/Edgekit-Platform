@@ -15,6 +15,7 @@ export interface WebSocketAttachment {
   userName: string
   channels: string[]
   connectedAt: number
+  isAdmin?: boolean
 }
 
 /**
@@ -37,12 +38,14 @@ export class RealtimeDurableObject extends DurableObject {
 
       const userId = url.searchParams.get('userId') || `anon_${crypto.randomUUID().slice(0, 8)}`
       const userName = url.searchParams.get('userName') || 'Anônimo'
+      const isAdmin = url.searchParams.get('isAdmin') === 'true'
       const initialChannel = url.searchParams.get('channel')
 
       const initialChannels: string[] = []
       if (initialChannel && initialChannel.trim()) {
         const clean = initialChannel.trim()
-        if (!clean.startsWith('_ek_')) {
+        const isRestricted = clean.startsWith('_ek_') || clean.startsWith('db:')
+        if (!isRestricted || isAdmin) {
           initialChannels.push(clean)
         }
       }
@@ -53,6 +56,7 @@ export class RealtimeDurableObject extends DurableObject {
         userName,
         channels: initialChannels,
         connectedAt: Date.now(),
+        isAdmin,
       }
 
       // Aceita WebSocket no contexto de hibernação da Cloudflare com tags
@@ -134,11 +138,12 @@ export class RealtimeDurableObject extends DurableObject {
         const channelToSub = parsed.channel
         if (channelToSub && typeof channelToSub === 'string') {
           const cleanChannel = channelToSub.trim()
-          if (cleanChannel.startsWith('_ek_')) {
+          const isRestricted = cleanChannel.startsWith('_ek_') || cleanChannel.startsWith('db:')
+          if (isRestricted && !session.isAdmin) {
             ws.send(
               JSON.stringify({
                 error: 'FORBIDDEN_CHANNEL',
-                message: 'Assinatura em canais do sistema (_ek_*) é proibida.',
+                message: 'Assinatura em canais do sistema (_ek_*) ou CDC (db:*) é restrita a administradores e service_role.',
                 channel: cleanChannel,
               }),
             )

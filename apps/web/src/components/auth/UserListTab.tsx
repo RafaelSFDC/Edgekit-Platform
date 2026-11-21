@@ -13,6 +13,21 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableHead,
+  TableRow,
+  TableCell,
+} from '@/components/ui/table';
+import {
+  Empty,
+  EmptyHeader,
+  EmptyTitle,
+  EmptyDescription,
+  EmptyMedia,
+} from '@/components/ui/empty';
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -189,124 +204,134 @@ export const UserListTab: React.FC<UserListTabProps> = ({
             <span>Carregando usuários...</span>
           </div>
         ) : filteredUsers.length === 0 ? (
-          <div className="p-12 text-center text-xs text-muted-foreground">
-            {users.length === 0
-              ? 'Nenhum usuário cadastrado na aplicação ainda.'
-              : 'Nenhum usuário encontrado para a busca.'}
+          <div className="p-6">
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <Users className="size-4" />
+                </EmptyMedia>
+                <EmptyTitle>
+                  {users.length === 0 ? 'Nenhum usuário cadastrado' : 'Nenhum usuário encontrado'}
+                </EmptyTitle>
+                <EmptyDescription>
+                  {users.length === 0
+                    ? 'Nenhum usuário cadastrado na aplicação ainda. Crie um novo usuário para começar.'
+                    : 'Nenhum usuário encontrado para a busca especificada.'}
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead className="bg-muted/60 border-b border-border/70">
-                <tr>
-                  <th className="px-3.5 py-2.5 text-[11px] font-semibold text-muted-foreground uppercase">
-                    Usuário
-                  </th>
-                  <th className="px-3.5 py-2.5 text-[11px] font-semibold text-muted-foreground uppercase">
-                    E-mail
-                  </th>
-                  <th className="px-3.5 py-2.5 text-[11px] font-semibold text-muted-foreground uppercase">
-                    Função
-                  </th>
-                  <th className="px-3.5 py-2.5 text-[11px] font-semibold text-muted-foreground uppercase">
-                    2FA
-                  </th>
-                  <th className="px-3.5 py-2.5 text-[11px] font-semibold text-muted-foreground uppercase">
-                    Criado em
-                  </th>
-                  <th className="px-3.5 py-2.5 text-[11px] font-semibold text-muted-foreground uppercase text-right">
-                    Ações
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/50">
-                {filteredUsers.map((user) => (
-                  <tr key={user.id} className="hover:bg-muted/30 transition-colors group">
-                    <td className="px-3.5 py-2.5">
-                      <div className="flex items-center gap-2.5">
-                        <div className="size-7 rounded-full bg-primary/10 text-primary font-semibold text-xs flex items-center justify-center shrink-0">
-                          {user.name ? user.name.slice(0, 2).toUpperCase() : 'U'}
-                        </div>
-                        <div className="min-w-0">
-                          <p className="font-medium text-foreground truncate">{user.name || 'Sem nome'}</p>
-                          <p className="font-mono text-[10px] text-muted-foreground truncate">{user.id}</p>
-                        </div>
+          <Table>
+            <TableHeader className="bg-muted/60">
+              <TableRow>
+                <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase">
+                  Usuário
+                </TableHead>
+                <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase">
+                  E-mail
+                </TableHead>
+                <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase">
+                  Função
+                </TableHead>
+                <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase">
+                  2FA
+                </TableHead>
+                <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase">
+                  Criado em
+                </TableHead>
+                <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase text-right">
+                  Ações
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredUsers.map((user) => (
+                <TableRow key={user.id} className="hover:bg-muted/30 transition-colors group">
+                  <TableCell className="py-2.5">
+                    <div className="flex items-center gap-2.5">
+                      <div className="size-7 rounded-full bg-primary/10 text-primary font-semibold text-xs flex items-center justify-center shrink-0">
+                        {user.name ? user.name.slice(0, 2).toUpperCase() : 'U'}
                       </div>
-                    </td>
-
-                    <td className="px-3.5 py-2.5 text-muted-foreground">
-                      <div className="flex items-center gap-1.5">
-                        <span className="truncate">{user.email}</span>
-                        {user.emailVerified && (
-                          <span title="E-mail Verificado">
-                            <CheckCircle2 className="size-3 text-emerald-500 shrink-0" />
-                          </span>
-                        )}
+                      <div className="min-w-0">
+                        <p className="font-medium text-foreground truncate">{user.name || 'Sem nome'}</p>
+                        <p className="font-mono text-[10px] text-muted-foreground truncate">{user.id}</p>
                       </div>
-                    </td>
+                    </div>
+                  </TableCell>
 
-                    <td className="px-3.5 py-2.5">
-                      <button
-                        type="button"
-                        aria-label={`Alternar função de ${user.name || user.email}`}
-                        onClick={() => handleToggleRole(user)}
-                        title="Clique para alternar entre user e admin"
-                        className="cursor-pointer"
-                      >
-                        <Badge
-                          variant={user.role === 'admin' ? 'default' : 'secondary'}
-                          className={`text-[10px] ${
-                            user.role === 'admin' ? 'bg-orange-500 hover:bg-orange-600' : ''
-                          }`}
-                        >
-                          {user.role || 'user'}
-                        </Badge>
-                      </button>
-                    </td>
-
-                    <td className="px-3.5 py-2.5">
-                      {user.twoFactorEnabled ? (
-                        <Badge variant="outline" className="text-[10px] text-emerald-500 border-emerald-500/30 bg-emerald-500/10">
-                          Ativo
-                        </Badge>
-                      ) : (
-                        <span className="text-[11px] text-muted-foreground/60">—</span>
+                  <TableCell className="py-2.5 text-muted-foreground">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate">{user.email}</span>
+                      {user.emailVerified && (
+                        <span title="E-mail Verificado">
+                          <CheckCircle2 className="size-3 text-emerald-500 shrink-0" />
+                        </span>
                       )}
-                    </td>
+                    </div>
+                  </TableCell>
 
-                    <td className="px-3.5 py-2.5 text-muted-foreground font-mono text-[11px]">
-                      {user.createdAt ? new Date(user.createdAt).toLocaleDateString() : '—'}
-                    </td>
+                  <TableCell className="py-2.5">
+                    <button
+                      type="button"
+                      aria-label={`Alternar função de ${user.name || user.email}`}
+                      onClick={() => handleToggleRole(user)}
+                      title="Clique para alternar entre user e admin"
+                      className="cursor-pointer"
+                    >
+                      <Badge
+                        variant={user.role === 'admin' ? 'default' : 'secondary'}
+                        className={`text-[10px] ${
+                          user.role === 'admin' ? 'bg-orange-500 hover:bg-orange-600' : ''
+                        }`}
+                      >
+                        {user.role || 'user'}
+                      </Badge>
+                    </button>
+                  </TableCell>
 
-                    <td className="px-3.5 py-2.5 text-right whitespace-nowrap">
-                      <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setViewingSessionsUser(user)}
-                          className="h-7 text-xs px-2 gap-1 cursor-pointer text-muted-foreground hover:text-foreground"
-                          title="Ver sessões ativas deste usuário"
-                        >
-                          <Laptop className="size-3.5" />
-                          <span>Sessões</span>
-                        </Button>
+                  <TableCell className="py-2.5">
+                    {user.twoFactorEnabled ? (
+                      <Badge variant="outline" className="text-[10px] text-emerald-500 border-emerald-500/30 bg-emerald-500/10">
+                        Ativo
+                      </Badge>
+                    ) : (
+                      <span className="text-[11px] text-muted-foreground/60">—</span>
+                    )}
+                  </TableCell>
 
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => setDeletingUser(user)}
-                          className="size-7 text-muted-foreground hover:text-destructive cursor-pointer"
-                          title="Excluir usuário"
-                        >
-                          <Trash2 className="size-3.5" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                  <TableCell className="py-2.5 text-muted-foreground font-mono text-[11px]">
+                    {user.createdAt ? new Date(user.createdAt).toLocaleDateString() : '—'}
+                  </TableCell>
+
+                  <TableCell className="py-2.5 text-right whitespace-nowrap">
+                    <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setViewingSessionsUser(user)}
+                        className="h-7 text-xs px-2 gap-1 cursor-pointer text-muted-foreground hover:text-foreground"
+                        title="Ver sessões ativas deste usuário"
+                      >
+                        <Laptop className="size-3.5" />
+                        <span>Sessões</span>
+                      </Button>
+
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setDeletingUser(user)}
+                        className="size-7 text-muted-foreground hover:text-destructive cursor-pointer"
+                        title="Excluir usuário"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
       </div>
 

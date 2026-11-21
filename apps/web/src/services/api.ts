@@ -19,14 +19,14 @@ export class ApiError extends Error {
   }
 }
 
-const API_BASE =
+export const API_BASE =
   (typeof import.meta !== 'undefined' && import.meta.env
     ? (import.meta.env.VITE_API_BASE_URL as string | undefined)
     : '') || '';
 
 export const STORAGE_KEY_ADMIN = 'edgekit_platform_admin_key';
 
-function getHeaders(customHeaders?: Record<string, string>): Record<string, string> {
+export function getHeaders(customHeaders?: Record<string, string>): Record<string, string> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...customHeaders,
@@ -40,16 +40,87 @@ function getHeaders(customHeaders?: Record<string, string>): Record<string, stri
   return headers;
 }
 
+export interface ApiRequestOptions {
+  method?: string;
+  body?: any;
+  headers?: Record<string, string>;
+  errorMessage?: string;
+  skipErrorCheck?: boolean;
+}
+
+export interface ApiRequestResult<T = any> {
+  res: Response;
+  json: any;
+  data: T;
+}
+
+/**
+ * Função base padronizada de comunicação HTTP com a API Cloudflare Workers.
+ * Garante que 100% das chamadas enviem `credentials: 'include'` para tráfego seguro de cookies HttpOnly
+ * em ambientes cross-origin e local, injeta chaves administrativas de forma centralizada
+ * e padroniza o tratamento de erros em instâncias de `ApiError`.
+ */
+export async function apiRequest<T = any>(
+  path: string,
+  options: ApiRequestOptions = {}
+): Promise<ApiRequestResult<T>> {
+  const {
+    method = 'GET',
+    body,
+    headers: customHeaders,
+    errorMessage,
+    skipErrorCheck = false,
+  } = options;
+
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+  const finalHeaders = getHeaders(customHeaders);
+
+  if (isFormData) {
+    delete finalHeaders['Content-Type'];
+  }
+
+  const fetchInit: RequestInit = {
+    method,
+    headers: finalHeaders,
+    credentials: 'include',
+  };
+
+  if (body !== undefined) {
+    fetchInit.body = isFormData || typeof body === 'string' ? body : JSON.stringify(body);
+  }
+
+  const res = await fetch(`${API_BASE}${path}`, fetchInit);
+
+  const text = await res.text();
+  let json: any = {};
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    json = { success: false, error: { message: text } };
+  }
+
+  if (!skipErrorCheck && (!res.ok || json.success === false)) {
+    const msg =
+      json?.error?.message ||
+      json?.message ||
+      errorMessage ||
+      `Falha na requisição (${res.status})`;
+    throw new ApiError(msg, res.status);
+  }
+
+  return { res, json, data: json.data as T };
+}
+
+// =========================================================================
+// 1. AUTENTICAÇÃO E SESSÃO ADMINISTRATIVA
+// =========================================================================
+
 export async function fetchAuthMe(): Promise<{ authenticated: boolean; data?: any }> {
   try {
-    const res = await fetch(`${API_BASE}/api/v1/admin/me`, {
-      headers: getHeaders(),
-      credentials: 'include',
-    });
+    const { res, json } = await apiRequest('/api/v1/admin/me', { skipErrorCheck: true });
     if (!res.ok) {
       return { authenticated: false };
     }
-    const json = await res.json();
     return {
       authenticated: Boolean(json.success && (json.data?.admin || json.data?.apiKey)),
       data: json.data,
@@ -61,14 +132,12 @@ export async function fetchAuthMe(): Promise<{ authenticated: boolean; data?: an
 
 export async function loginAuth(passkey: string): Promise<{ authenticated: boolean; role?: string }> {
   const clean = passkey.trim();
-  const res = await fetch(`${API_BASE}/api/v1/admin/login`, {
+  const { res, json } = await apiRequest('/api/v1/admin/login', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({ key: clean }),
+    body: { key: clean },
+    skipErrorCheck: true,
   });
 
-  const json = await res.json().catch(() => ({ authenticated: false }));
   if (!res.ok || !json.authenticated) {
     throw new ApiError(
       json.error?.message || 'Chave de acesso inválida.',
@@ -76,7 +145,6 @@ export async function loginAuth(passkey: string): Promise<{ authenticated: boole
     );
   }
 
-  // Se salvarmos no localStorage também, facilita chamadas com cabeçalho explícito
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem(STORAGE_KEY_ADMIN, clean);
   }
@@ -86,9 +154,9 @@ export async function loginAuth(passkey: string): Promise<{ authenticated: boole
 
 export async function logoutAuth(): Promise<{ authenticated: boolean }> {
   try {
-    await fetch(`${API_BASE}/api/v1/admin/logout`, {
+    await apiRequest('/api/v1/admin/logout', {
       method: 'POST',
-      credentials: 'include',
+      skipErrorCheck: true,
     });
   } catch {}
 
@@ -100,11 +168,9 @@ export async function logoutAuth(): Promise<{ authenticated: boolean }> {
 }
 
 export async function checkSetupStatus(): Promise<SetupStatusResponse> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/setup-status`);
-  if (!res.ok) {
-    throw new ApiError('Falha ao verificar status do setup.', res.status);
-  }
-  const json = await res.json();
+  const { json } = await apiRequest('/api/v1/admin/setup-status', {
+    errorMessage: 'Falha ao verificar status do setup.',
+  });
   return json.data ?? { isSetupComplete: true };
 }
 
@@ -114,17 +180,11 @@ export async function performSetup(data: {
   password: string;
   setupToken?: string;
 }): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/setup`, {
+  const { json } = await apiRequest('/api/v1/admin/setup', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify(data),
+    body: data,
+    errorMessage: 'Falha ao executar o setup inicial.',
   });
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao executar o setup inicial.', res.status);
-  }
   return json;
 }
 
@@ -132,17 +192,15 @@ export async function loginAdminCredentials(credentials: {
   email: string;
   password: string;
 }): Promise<{ authenticated: boolean; role?: string; admin?: any }> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/login`, {
+  const { res, json } = await apiRequest('/api/v1/admin/login', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({
+    body: {
       email: credentials.email.trim().toLowerCase(),
       password: credentials.password,
-    }),
+    },
+    skipErrorCheck: true,
   });
 
-  const json = await res.json().catch(() => ({ authenticated: false }));
   if (!res.ok || !json.authenticated) {
     throw new ApiError(
       json.error?.message || 'Credenciais de administrador inválidas.',
@@ -153,28 +211,22 @@ export async function loginAdminCredentials(credentials: {
   return { authenticated: true, role: json.role, admin: json.data?.admin };
 }
 
-export async function fetchStats(): Promise<PlatformStats> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/stats`, {
-    headers: getHeaders(),
-  });
+// =========================================================================
+// 2. ESTATÍSTICAS E TABELAS CLOUDFLARE D1
+// =========================================================================
 
-  if (!res.ok) {
-    throw new ApiError('Falha ao buscar estatísticas da plataforma.', res.status);
-  }
-  const json = await res.json();
-  return json.data;
+export async function fetchStats(): Promise<PlatformStats> {
+  const { data } = await apiRequest<PlatformStats>('/api/v1/admin/stats', {
+    errorMessage: 'Falha ao buscar estatísticas da plataforma.',
+  });
+  return data;
 }
 
 export async function fetchTables(): Promise<D1TableInfo[]> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/tables`, {
-    headers: getHeaders(),
+  const { data } = await apiRequest<D1TableInfo[]>('/api/v1/admin/tables', {
+    errorMessage: 'Falha ao listar tabelas do Cloudflare D1.',
   });
-
-  if (!res.ok) {
-    throw new ApiError('Falha ao listar tabelas do Cloudflare D1.', res.status);
-  }
-  const json = await res.json();
-  return json.data || [];
+  return data || [];
 }
 
 export async function createTable(data: {
@@ -192,95 +244,72 @@ export async function createTable(data: {
     };
   }>;
 }): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/tables`, {
+  const { json } = await apiRequest('/api/v1/admin/tables', {
     method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(data),
+    body: data,
+    errorMessage: 'Falha ao criar tabela.',
   });
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao criar tabela.', res.status);
-  }
   return json;
 }
 
 export async function dropTable(tableName: string): Promise<boolean> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/tables/${encodeURIComponent(tableName)}`, {
+  await apiRequest(`/api/v1/admin/tables/${encodeURIComponent(tableName)}`, {
     method: 'DELETE',
-    headers: getHeaders(),
+    errorMessage: 'Falha ao excluir tabela.',
   });
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao excluir tabela.', res.status);
-  }
   return true;
 }
+
+// =========================================================================
+// 3. OPERAÇÕES CRUD NO BANCO DE DADOS (D1)
+// =========================================================================
 
 export async function fetchTableRows(
   table: string,
   limit = 50,
   offset = 0
 ): Promise<any[]> {
-  const res = await fetch(
-    `${API_BASE}/api/v1/db/${encodeURIComponent(table)}?limit=${limit}&offset=${offset}`,
+  const { data } = await apiRequest<any[]>(
+    `/api/v1/db/${encodeURIComponent(table)}?limit=${limit}&offset=${offset}`,
     {
-      headers: getHeaders(),
+      errorMessage: `Falha ao carregar registros da tabela "${table}".`,
     }
   );
-
-  if (!res.ok) {
-    throw new ApiError(`Falha ao carregar registros da tabela "${table}".`, res.status);
-  }
-  const json = await res.json();
-  return json.data || [];
+  return data || [];
 }
 
 export async function insertTableRow(table: string, record: any): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/v1/db/${encodeURIComponent(table)}`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(record),
-  });
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao inserir linha.', res.status);
-  }
-  return json.data;
+  const { data } = await apiRequest(
+    `/api/v1/db/${encodeURIComponent(table)}`,
+    {
+      method: 'POST',
+      body: record,
+      errorMessage: 'Falha ao inserir linha.',
+    }
+  );
+  return data;
 }
 
 export async function updateTableRow(table: string, id: string, record: any): Promise<any> {
-  const res = await fetch(
-    `${API_BASE}/api/v1/db/${encodeURIComponent(table)}/${encodeURIComponent(id)}`,
+  const { data } = await apiRequest(
+    `/api/v1/db/${encodeURIComponent(table)}/${encodeURIComponent(id)}`,
     {
       method: 'PATCH',
-      headers: getHeaders(),
-      body: JSON.stringify(record),
+      body: record,
+      errorMessage: 'Falha ao atualizar linha.',
     }
   );
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao atualizar linha.', res.status);
-  }
-  return json.data;
+  return data;
 }
 
 export async function deleteTableRow(table: string, id: string): Promise<boolean> {
-  const res = await fetch(
-    `${API_BASE}/api/v1/db/${encodeURIComponent(table)}/${encodeURIComponent(id)}`,
+  await apiRequest(
+    `/api/v1/db/${encodeURIComponent(table)}/${encodeURIComponent(id)}`,
     {
       method: 'DELETE',
-      headers: getHeaders(),
+      errorMessage: 'Falha ao excluir registro.',
     }
   );
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao excluir registro.', res.status);
-  }
   return true;
 }
 
@@ -301,24 +330,25 @@ export async function runStructuredQuery(
   meta?: { total: number; limit: number; offset: number; hasMore: boolean };
   error?: { message: string; code?: string };
 }> {
-  const res = await fetch(`${API_BASE}/api/v1/db/${encodeURIComponent(table)}/query`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(spec),
-  });
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
+  try {
+    const { json } = await apiRequest(`/api/v1/db/${encodeURIComponent(table)}/query`, {
+      method: 'POST',
+      body: spec,
+    });
+    return json;
+  } catch (err: any) {
     return {
       success: false,
       error: {
-        message: json.error?.message || 'Falha ao executar consulta declarativa.',
-        code: json.error?.code,
+        message: err.message || 'Falha ao executar consulta declarativa.',
       },
     };
   }
-  return json;
 }
+
+// =========================================================================
+// 4. EDGE FUNCTIONS, SQL DIRETO E SCHEMA TYPEGEN
+// =========================================================================
 
 export async function fetchFunctionsList(): Promise<
   Array<{
@@ -328,14 +358,15 @@ export async function fetchFunctionsList(): Promise<
     endpoint: string;
   }>
 > {
-  const res = await fetch(`${API_BASE}/api/v1/functions`, {
-    headers: getHeaders(),
+  const { data } = await apiRequest<Array<{
+    name: string;
+    description: string;
+    methods: string[];
+    endpoint: string;
+  }>>('/api/v1/functions', {
+    errorMessage: 'Falha ao listar Edge Functions locais.',
   });
-  if (!res.ok) {
-    throw new ApiError('Falha ao listar Edge Functions locais.', res.status);
-  }
-  const json = await res.json();
-  return json.data || [];
+  return data || [];
 }
 
 export async function invokeFunctionTest(
@@ -343,9 +374,11 @@ export async function invokeFunctionTest(
   method = 'GET',
   body?: any,
 ): Promise<{ status: number; ok: boolean; data: any }> {
+  const fetchHeaders = getHeaders();
   const init: RequestInit = {
     method,
-    headers: getHeaders(),
+    headers: fetchHeaders,
+    credentials: 'include',
   };
   if (body && method !== 'GET') {
     init.body = typeof body === 'string' ? body : JSON.stringify(body);
@@ -360,49 +393,41 @@ export async function invokeFunctionTest(
 }
 
 export async function fetchGeneratedTypes(): Promise<string> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/schema/types`, {
-    headers: getHeaders(),
+  const { data } = await apiRequest<{ typescript?: string }>('/api/v1/admin/schema/types', {
+    errorMessage: 'Falha ao gerar tipagens TypeScript do schema.',
   });
-  if (!res.ok) {
-    throw new ApiError('Falha ao gerar tipagens TypeScript do schema.', res.status);
-  }
-  const json = await res.json();
-  return json.data?.typescript || '';
+  return data?.typescript || '';
 }
 
 export async function runSql(query: string): Promise<SqlQueryResult> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/sql`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify({ query }),
-  });
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
+  try {
+    const { json } = await apiRequest('/api/v1/admin/sql', {
+      method: 'POST',
+      body: { query },
+    });
+    return {
+      success: true,
+      rowCount: json.rowCount,
+      rows: json.rows,
+    };
+  } catch (err: any) {
     return {
       success: false,
       error: {
-        message: json.error?.message || 'Erro ao executar consulta SQL.',
-        code: json.error?.code,
+        message: err.message || 'Erro ao executar consulta SQL.',
       },
     };
   }
-  return {
-    success: true,
-    rowCount: json.rowCount,
-    rows: json.rows,
-  };
 }
 
-export async function fetchFiles(bucket = 'default'): Promise<StorageFile[]> {
-  const res = await fetch(`${API_BASE}/api/v1/storage/${encodeURIComponent(bucket)}/list`, {
-    headers: getHeaders(),
-  });
+// =========================================================================
+// 5. STORAGE CLOUDFLARE R2
+// =========================================================================
 
-  if (!res.ok) {
-    throw new ApiError('Falha ao listar arquivos do storage R2.', res.status);
-  }
-  const json = await res.json();
+export async function fetchFiles(bucket = 'default'): Promise<StorageFile[]> {
+  const { json } = await apiRequest(`/api/v1/storage/${encodeURIComponent(bucket)}/list`, {
+    errorMessage: 'Falha ao listar arquivos do storage R2.',
+  });
   return json.data?.objects || json.data || [];
 }
 
@@ -410,47 +435,33 @@ export async function uploadFile(bucket: string, file: File): Promise<any> {
   const formData = new FormData();
   formData.append('file', file);
 
-  const headers = getHeaders();
-  delete headers['Content-Type'];
-
-  const res = await fetch(`${API_BASE}/api/v1/storage/${encodeURIComponent(bucket)}/upload`, {
-    method: 'POST',
-    headers,
-    body: formData,
-  });
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao enviar arquivo.', res.status);
-  }
-  return json.data;
+  const { data } = await apiRequest(
+    `/api/v1/storage/${encodeURIComponent(bucket)}/upload`,
+    {
+      method: 'POST',
+      body: formData,
+      errorMessage: 'Falha ao enviar arquivo.',
+    }
+  );
+  return data;
 }
 
 export async function deleteFile(bucket: string, key: string): Promise<boolean> {
-  const res = await fetch(
-    `${API_BASE}/api/v1/storage/${encodeURIComponent(bucket)}/file/${encodeURIComponent(key)}`,
+  await apiRequest(
+    `/api/v1/storage/${encodeURIComponent(bucket)}/file/${encodeURIComponent(key)}`,
     {
       method: 'DELETE',
-      headers: getHeaders(),
+      errorMessage: 'Falha ao excluir arquivo.',
     }
   );
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao excluir arquivo.', res.status);
-  }
   return true;
 }
 
 export async function fetchBuckets(): Promise<any[]> {
-  const res = await fetch(`${API_BASE}/api/v1/storage/buckets`, {
-    headers: getHeaders(),
+  const { data } = await apiRequest<any[]>('/api/v1/storage/buckets', {
+    errorMessage: 'Falha ao listar buckets.',
   });
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao listar buckets.', res.status);
-  }
-  return json.data || [];
+  return data || [];
 }
 
 export async function createBucket(data: {
@@ -461,16 +472,12 @@ export async function createBucket(data: {
   readRule?: string;
   writeRule?: string;
 }): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/v1/storage/buckets`, {
+  const { data: result } = await apiRequest('/api/v1/storage/buckets', {
     method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(data),
+    body: data,
+    errorMessage: 'Falha ao criar bucket.',
   });
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao criar bucket.', res.status);
-  }
-  return json.data;
+  return result;
 }
 
 export async function updateBucket(
@@ -483,16 +490,12 @@ export async function updateBucket(
     writeRule?: string;
   }
 ): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/v1/storage/buckets/${encodeURIComponent(name)}`, {
+  const { data: result } = await apiRequest(`/api/v1/storage/buckets/${encodeURIComponent(name)}`, {
     method: 'PUT',
-    headers: getHeaders(),
-    body: JSON.stringify(data),
+    body: data,
+    errorMessage: 'Falha ao atualizar bucket.',
   });
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao atualizar bucket.', res.status);
-  }
-  return json.data;
+  return result;
 }
 
 export async function generateSignedUrl(
@@ -500,37 +503,33 @@ export async function generateSignedUrl(
   key: string,
   expiresInSeconds = 3600
 ): Promise<{ url: string; expiresAt: string }> {
-  const res = await fetch(`${API_BASE}/api/v1/storage/${encodeURIComponent(bucket)}/signed-url`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify({ key, expiresInSeconds }),
-  });
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao gerar link assinado.', res.status);
-  }
-  return json.data;
+  const { data } = await apiRequest<{ url: string; expiresAt: string }>(
+    `/api/v1/storage/${encodeURIComponent(bucket)}/signed-url`,
+    {
+      method: 'POST',
+      body: { key, expiresInSeconds },
+      errorMessage: 'Falha ao gerar link assinado.',
+    }
+  );
+  return data;
 }
 
-export async function fetchKeys(): Promise<PlatformKeys> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/keys`, {
-    headers: getHeaders(),
-  });
+// =========================================================================
+// 6. CHAVES, CONFIGURAÇÃO PÚBLICA E REALTIME BROADCAST
+// =========================================================================
 
-  if (!res.ok) {
-    throw new ApiError('Falha ao obter credenciais da plataforma.', res.status);
-  }
-  const json = await res.json();
-  return json.data || {};
+export async function fetchKeys(): Promise<PlatformKeys> {
+  const { data } = await apiRequest<PlatformKeys>('/api/v1/admin/keys', {
+    errorMessage: 'Falha ao obter credenciais da plataforma.',
+  });
+  return data || {};
 }
 
 export async function fetchPublicConfig(): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/v1/auth/public-config`);
-  if (!res.ok) {
-    throw new ApiError('Falha ao obter configurações públicas.', res.status);
-  }
-  const json = await res.json();
-  return json.data;
+  const { data } = await apiRequest('/api/v1/auth/public-config', {
+    errorMessage: 'Falha ao obter configurações públicas.',
+  });
+  return data;
 }
 
 export async function broadcastRealtime(
@@ -538,35 +537,44 @@ export async function broadcastRealtime(
   event: string,
   payload: any
 ): Promise<any> {
-  const res = await fetch(
-    `${API_BASE}/api/v1/realtime/${encodeURIComponent(channel)}/broadcast`,
+  const { json } = await apiRequest(
+    `/api/v1/realtime/${encodeURIComponent(channel)}/broadcast`,
     {
       method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ event, payload }),
+      body: { event, payload },
+      errorMessage: 'Falha ao emitir mensagem realtime.',
     }
   );
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao emitir mensagem realtime.', res.status);
-  }
   return json;
 }
+
+// =========================================================================
+// 7. POLÍTICAS DE TABELA E SEGURANÇA
+// =========================================================================
 
 export async function fetchTablePolicy(
   table: string
 ): Promise<TablePolicy> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/tables/${encodeURIComponent(table)}/policy`, {
-    headers: getHeaders(),
-  });
-
-  if (!res.ok) {
-    throw new ApiError('Falha ao obter política da tabela.', res.status);
-  }
-  const json = await res.json();
-  return (
-    json.data || {
+  try {
+    const { data } = await apiRequest<TablePolicy>(
+      `/api/v1/admin/tables/${encodeURIComponent(table)}/policy`,
+      {
+        errorMessage: 'Falha ao obter política da tabela.',
+      }
+    );
+    return (
+      data || {
+        tableName: table,
+        rlsEnabled: true,
+        selectRule: 'public',
+        insertRule: 'authenticated',
+        updateRule: 'owner',
+        deleteRule: 'owner',
+        ownerColumn: 'user_id',
+      }
+    );
+  } catch {
+    return {
       tableName: table,
       rlsEnabled: true,
       selectRule: 'public',
@@ -574,54 +582,53 @@ export async function fetchTablePolicy(
       updateRule: 'owner',
       deleteRule: 'owner',
       ownerColumn: 'user_id',
-    }
-  );
+    };
+  }
 }
 
 export async function updateTablePolicy(
   table: string,
   policy: Partial<TablePolicy>
 ): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/tables/${encodeURIComponent(table)}/policy`, {
-    method: 'PUT',
-    headers: getHeaders(),
-    body: JSON.stringify(policy),
-  });
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao atualizar política da tabela.', res.status);
-  }
-  return json.data;
+  const { data } = await apiRequest(
+    `/api/v1/admin/tables/${encodeURIComponent(table)}/policy`,
+    {
+      method: 'PUT',
+      body: policy,
+      errorMessage: 'Falha ao atualizar política da tabela.',
+    }
+  );
+  return data;
 }
 
 export async function fetchSecuritySettings(): Promise<SecuritySettings> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/settings/security`, {
-    headers: getHeaders(),
-  });
-
-  if (!res.ok) {
-    throw new ApiError('Falha ao obter configurações de segurança.', res.status);
+  try {
+    const { data } = await apiRequest<SecuritySettings>(
+      '/api/v1/admin/settings/security',
+      {
+        errorMessage: 'Falha ao obter configurações de segurança.',
+      }
+    );
+    return data || { allowedOrigins: [], allowedIps: [], blockExternalLocalhost: true };
+  } catch {
+    return { allowedOrigins: [], allowedIps: [], blockExternalLocalhost: true };
   }
-  const json = await res.json();
-  return json.data || { allowedOrigins: [], allowedIps: [], blockExternalLocalhost: true };
 }
 
 export async function updateSecuritySettings(
   settings: Partial<SecuritySettings>
 ): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/settings/security`, {
+  const { data } = await apiRequest('/api/v1/admin/settings/security', {
     method: 'PUT',
-    headers: getHeaders(),
-    body: JSON.stringify(settings),
+    body: settings,
+    errorMessage: 'Falha ao salvar configurações de segurança.',
   });
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao salvar configurações de segurança.', res.status);
-  }
-  return json.data;
+  return data;
 }
+
+// =========================================================================
+// 8. ADMINISTRAÇÃO DE USUÁRIOS E ORGANIZAÇÕES
+// =========================================================================
 
 export async function adminCreateUser(data: {
   name: string;
@@ -629,142 +636,110 @@ export async function adminCreateUser(data: {
   password: string;
   role?: string;
 }): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/users`, {
+  const { data: result } = await apiRequest('/api/v1/admin/users', {
     method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(data),
+    body: data,
+    errorMessage: 'Falha ao criar usuário.',
   });
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao criar usuário.', res.status);
-  }
-  return json.data;
+  return result;
 }
 
 export async function adminUpdateUserRole(id: string, role: string): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/users/${encodeURIComponent(id)}/role`, {
+  const { json } = await apiRequest(`/api/v1/admin/users/${encodeURIComponent(id)}/role`, {
     method: 'PATCH',
-    headers: getHeaders(),
-    body: JSON.stringify({ role }),
+    body: { role },
+    errorMessage: 'Falha ao atualizar função do usuário.',
   });
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao atualizar função do usuário.', res.status);
-  }
   return json;
 }
 
 export async function adminDeleteUser(id: string): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/users/${encodeURIComponent(id)}`, {
+  const { json } = await apiRequest(`/api/v1/admin/users/${encodeURIComponent(id)}`, {
     method: 'DELETE',
-    headers: getHeaders(),
+    errorMessage: 'Falha ao excluir usuário.',
   });
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao excluir usuário.', res.status);
-  }
   return json;
 }
 
 export async function fetchUserSessions(userId: string): Promise<any[]> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/users/${encodeURIComponent(userId)}/sessions`, {
-    headers: getHeaders(),
-  });
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao carregar sessões.', res.status);
-  }
-  return json.data || [];
+  const { data } = await apiRequest<any[]>(
+    `/api/v1/admin/users/${encodeURIComponent(userId)}/sessions`,
+    {
+      errorMessage: 'Falha ao carregar sessões.',
+    }
+  );
+  return data || [];
 }
 
 export async function revokeSession(sessionId: string): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/sessions/${encodeURIComponent(sessionId)}`, {
-    method: 'DELETE',
-    headers: getHeaders(),
-  });
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao revogar sessão.', res.status);
-  }
+  const { json } = await apiRequest(
+    `/api/v1/admin/sessions/${encodeURIComponent(sessionId)}`,
+    {
+      method: 'DELETE',
+      errorMessage: 'Falha ao revogar sessão.',
+    }
+  );
   return json;
 }
 
 export async function fetchOrganizations(): Promise<any[]> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/organizations`, {
-    headers: getHeaders(),
+  const { data } = await apiRequest<any[]>('/api/v1/admin/organizations', {
+    errorMessage: 'Falha ao carregar organizações.',
   });
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao carregar organizações.', res.status);
-  }
-  return json.data || [];
+  return data || [];
 }
 
 export async function createOrganization(data: { name: string; slug: string }): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/organizations`, {
+  const { data: result } = await apiRequest('/api/v1/admin/organizations', {
     method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(data),
+    body: data,
+    errorMessage: 'Falha ao criar organização.',
   });
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao criar organização.', res.status);
-  }
-  return json.data;
+  return result;
 }
 
 export async function fetchOrganizationMembers(orgId: string): Promise<any[]> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/organizations/${encodeURIComponent(orgId)}/members`, {
-    headers: getHeaders(),
-  });
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao carregar membros da organização.', res.status);
-  }
-  return json.data || [];
+  const { data } = await apiRequest<any[]>(
+    `/api/v1/admin/organizations/${encodeURIComponent(orgId)}/members`,
+    {
+      errorMessage: 'Falha ao carregar membros da organização.',
+    }
+  );
+  return data || [];
 }
 
 export async function addOrganizationMember(orgId: string, data: { userId: string; role?: string }): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/organizations/${encodeURIComponent(orgId)}/members`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(data),
-  });
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao adicionar membro.', res.status);
-  }
+  const { json } = await apiRequest(
+    `/api/v1/admin/organizations/${encodeURIComponent(orgId)}/members`,
+    {
+      method: 'POST',
+      body: data,
+      errorMessage: 'Falha ao adicionar membro.',
+    }
+  );
   return json;
 }
 
 export async function removeOrganizationMember(orgId: string, userId: string): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/v1/admin/organizations/${encodeURIComponent(orgId)}/members/${encodeURIComponent(userId)}`, {
-    method: 'DELETE',
-    headers: getHeaders(),
-  });
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao remover membro da organização.', res.status);
-  }
+  const { json } = await apiRequest(
+    `/api/v1/admin/organizations/${encodeURIComponent(orgId)}/members/${encodeURIComponent(userId)}`,
+    {
+      method: 'DELETE',
+      errorMessage: 'Falha ao remover membro da organização.',
+    }
+  );
   return json;
 }
 
 // =========================================================================
-// GESTÃO DE WEBHOOKS
+// 9. GESTÃO DE WEBHOOKS
 // =========================================================================
 
 export async function fetchWebhooks(): Promise<WebhookInfo[]> {
-  const res = await fetch(`${API_BASE}/api/v1/webhooks`, {
-    headers: getHeaders(),
+  const { data } = await apiRequest<WebhookInfo[]>('/api/v1/webhooks', {
+    errorMessage: 'Falha ao listar webhooks.',
   });
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao listar webhooks.', res.status);
-  }
-  return json.data || [];
+  return data || [];
 }
 
 export async function createWebhook(data: {
@@ -774,16 +749,12 @@ export async function createWebhook(data: {
   secret?: string;
   enabled?: boolean;
 }): Promise<WebhookInfo> {
-  const res = await fetch(`${API_BASE}/api/v1/webhooks`, {
+  const { data: result } = await apiRequest<WebhookInfo>('/api/v1/webhooks', {
     method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(data),
+    body: data,
+    errorMessage: 'Falha ao criar webhook.',
   });
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao criar webhook.', res.status);
-  }
-  return json.data;
+  return result;
 }
 
 export async function updateWebhook(
@@ -796,27 +767,19 @@ export async function updateWebhook(
     enabled: boolean;
   }>,
 ): Promise<WebhookInfo> {
-  const res = await fetch(`${API_BASE}/api/v1/webhooks/${encodeURIComponent(id)}`, {
+  const { data: result } = await apiRequest<WebhookInfo>(`/api/v1/webhooks/${encodeURIComponent(id)}`, {
     method: 'PUT',
-    headers: getHeaders(),
-    body: JSON.stringify(data),
+    body: data,
+    errorMessage: 'Falha ao atualizar webhook.',
   });
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao atualizar webhook.', res.status);
-  }
-  return json.data;
+  return result;
 }
 
 export async function deleteWebhook(id: string): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/v1/webhooks/${encodeURIComponent(id)}`, {
+  const { json } = await apiRequest(`/api/v1/webhooks/${encodeURIComponent(id)}`, {
     method: 'DELETE',
-    headers: getHeaders(),
+    errorMessage: 'Falha ao excluir webhook.',
   });
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha ao excluir webhook.', res.status);
-  }
   return json;
 }
 
@@ -827,15 +790,15 @@ export async function testWebhook(id: string): Promise<{
   responseSnippet: string;
   signatureSent: string | null;
 }> {
-  const res = await fetch(`${API_BASE}/api/v1/webhooks/${encodeURIComponent(id)}/test`, {
+  const { data } = await apiRequest<{
+    statusCode: number;
+    statusText: string;
+    latencyMs: number;
+    responseSnippet: string;
+    signatureSent: string | null;
+  }>(`/api/v1/webhooks/${encodeURIComponent(id)}/test`, {
     method: 'POST',
-    headers: getHeaders(),
+    errorMessage: 'Falha no teste de envio do webhook.',
   });
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new ApiError(json.error?.message || 'Falha no teste de envio do webhook.', res.status);
-  }
-  return json.data;
+  return data;
 }
-
-

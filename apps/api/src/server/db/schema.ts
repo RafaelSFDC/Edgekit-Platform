@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core'
+import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core'
 
 // =========================================================================
 // 1. PLATFORM ADMIN & SYSTEM TABLES (Prefixo _ek_*)
@@ -15,17 +15,23 @@ export const ekAdmins = sqliteTable('_ek_admins', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })
 
-export const ekAdminSessions = sqliteTable('_ek_admin_sessions', {
-  id: text('id').primaryKey(),
-  token: text('token').notNull().unique(), // SHA-256 hash da sessão
-  adminId: text('admin_id')
-    .notNull()
-    .references(() => ekAdmins.id, { onDelete: 'cascade' }),
-  expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
-  ipAddress: text('ip_address'),
-  userAgent: text('user_agent'),
-  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
-})
+export const ekAdminSessions = sqliteTable(
+  '_ek_admin_sessions',
+  {
+    id: text('id').primaryKey(),
+    token: text('token').notNull().unique(), // SHA-256 hash da sessão
+    adminId: text('admin_id')
+      .notNull()
+      .references(() => ekAdmins.id, { onDelete: 'cascade' }),
+    expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => [
+    index('idx_ek_admin_sessions_admin_id').on(table.adminId),
+  ],
+)
 
 export const ekAdminInvites = sqliteTable('_ek_admin_invites', {
   id: text('id').primaryKey(),
@@ -75,19 +81,26 @@ export const ekStorageBuckets = sqliteTable('_ek_storage_buckets', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })
 
-export const ekStorageObjects = sqliteTable('_ek_storage_objects', {
-  id: text('id').primaryKey(),
-  bucket: text('bucket').notNull(),
-  key: text('key').notNull().unique(),
-  name: text('name').notNull(),
-  size: integer('size').notNull(),
-  mimeType: text('mime_type').notNull(),
-  userId: text('user_id'),
-  isPublic: integer('is_public', { mode: 'boolean' }).notNull().default(false),
-  metadata: text('metadata'), // JSON string
-  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
-})
+export const ekStorageObjects = sqliteTable(
+  '_ek_storage_objects',
+  {
+    id: text('id').primaryKey(),
+    bucket: text('bucket').notNull(),
+    key: text('key').notNull().unique(),
+    name: text('name').notNull(),
+    size: integer('size').notNull(),
+    mimeType: text('mime_type').notNull(),
+    userId: text('user_id'),
+    isPublic: integer('is_public', { mode: 'boolean' }).notNull().default(false),
+    metadata: text('metadata'), // JSON string
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => [
+    index('idx_ek_storage_objects_bucket').on(table.bucket),
+    index('idx_ek_storage_objects_user_id').on(table.userId),
+  ],
+)
 
 export const ekWebhooks = sqliteTable('_ek_webhooks', {
   id: text('id').primaryKey(),
@@ -100,17 +113,23 @@ export const ekWebhooks = sqliteTable('_ek_webhooks', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })
 
-export const ekAuditLogs = sqliteTable('_ek_audit_logs', {
-  id: text('id').primaryKey(),
-  action: text('action').notNull(), // ex: 'table.create', 'key.create', 'admin.login'
-  entity: text('entity').notNull(),
-  entityId: text('entity_id'),
-  actorType: text('actor_type').notNull(), // 'admin' | 'user' | 'service' | 'system'
-  actorId: text('actor_id'),
-  details: text('details'), // JSON string
-  ipAddress: text('ip_address'),
-  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
-})
+export const ekAuditLogs = sqliteTable(
+  '_ek_audit_logs',
+  {
+    id: text('id').primaryKey(),
+    action: text('action').notNull(), // ex: 'table.create', 'key.create', 'admin.login'
+    entity: text('entity').notNull(),
+    entityId: text('entity_id'),
+    actorType: text('actor_type').notNull(), // 'admin' | 'user' | 'service' | 'system'
+    actorId: text('actor_id'),
+    details: text('details'), // JSON string
+    ipAddress: text('ip_address'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => [
+    index('idx_ek_audit_logs_created_at').on(table.createdAt),
+  ],
+)
 
 export const ekSettings = sqliteTable('_ek_settings', {
   key: text('key').primaryKey(),
@@ -139,38 +158,50 @@ export const users = sqliteTable('users', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })
 
-export const sessions = sqliteTable('sessions', {
-  id: text('id').primaryKey(),
-  expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
-  token: text('token').notNull().unique(),
-  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
-  ipAddress: text('ip_address'),
-  userAgent: text('user_agent'),
-  userId: text('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  activeOrganizationId: text('active_organization_id'),
-  impersonatedBy: text('impersonated_by'),
-})
+export const sessions = sqliteTable(
+  'sessions',
+  {
+    id: text('id').primaryKey(),
+    expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+    token: text('token').notNull().unique(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    activeOrganizationId: text('active_organization_id'),
+    impersonatedBy: text('impersonated_by'),
+  },
+  (table) => [
+    index('idx_sessions_user_id').on(table.userId),
+  ],
+)
 
-export const accounts = sqliteTable('accounts', {
-  id: text('id').primaryKey(),
-  accountId: text('account_id').notNull(),
-  providerId: text('provider_id').notNull(),
-  userId: text('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  accessToken: text('access_token'),
-  refreshToken: text('refresh_token'),
-  idToken: text('id_token'),
-  accessTokenExpiresAt: integer('access_token_expires_at', { mode: 'timestamp' }),
-  refreshTokenExpiresAt: integer('refresh_token_expires_at', { mode: 'timestamp' }),
-  scope: text('scope'),
-  password: text('password'),
-  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
-})
+export const accounts = sqliteTable(
+  'accounts',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id').notNull(),
+    providerId: text('provider_id').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    accessToken: text('access_token'),
+    refreshToken: text('refresh_token'),
+    idToken: text('id_token'),
+    accessTokenExpiresAt: integer('access_token_expires_at', { mode: 'timestamp' }),
+    refreshTokenExpiresAt: integer('refresh_token_expires_at', { mode: 'timestamp' }),
+    scope: text('scope'),
+    password: text('password'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => [
+    index('idx_accounts_user_id').on(table.userId),
+  ],
+)
 
 export const verifications = sqliteTable('verifications', {
   id: text('id').primaryKey(),
@@ -191,17 +222,24 @@ export const organizations = sqliteTable('organizations', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }),
 })
 
-export const members = sqliteTable('members', {
-  id: text('id').primaryKey(),
-  organizationId: text('organization_id')
-    .notNull()
-    .references(() => organizations.id, { onDelete: 'cascade' }),
-  userId: text('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  role: text('role').notNull().default('member'),
-  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
-})
+export const members = sqliteTable(
+  'members',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: text('role').notNull().default('member'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => [
+    index('idx_members_organization_id').on(table.organizationId),
+    index('idx_members_user_id').on(table.userId),
+  ],
+)
 
 export const invitations = sqliteTable('invitations', {
   id: text('id').primaryKey(),
@@ -232,21 +270,28 @@ export const twoFactors = sqliteTable('two_factors', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }),
 })
 
-export const passkeys = sqliteTable('passkeys', {
-  id: text('id').primaryKey(),
-  name: text('name'),
-  publicKey: text('public_key').notNull(),
-  userId: text('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  credentialID: text('credential_id').notNull(),
-  counter: integer('counter').notNull(),
-  deviceType: text('device_type').notNull(),
-  backedUp: integer('backed_up', { mode: 'boolean' }).notNull(),
-  transports: text('transports'),
-  createdAt: integer('created_at', { mode: 'timestamp' }),
-  aaguid: text('aaguid'),
-})
+export const passkeys = sqliteTable(
+  'passkeys',
+  {
+    id: text('id').primaryKey(),
+    name: text('name'),
+    publicKey: text('public_key').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    credentialID: text('credential_id').notNull(),
+    counter: integer('counter').notNull(),
+    deviceType: text('device_type').notNull(),
+    backedUp: integer('backed_up', { mode: 'boolean' }).notNull(),
+    transports: text('transports'),
+    createdAt: integer('created_at', { mode: 'timestamp' }),
+    aaguid: text('aaguid'),
+  },
+  (table) => [
+    index('idx_passkeys_user_id').on(table.userId),
+    index('idx_passkeys_credential_id').on(table.credentialID),
+  ],
+)
 
 export const jwks = sqliteTable('jwks', {
   id: text('id').primaryKey(),

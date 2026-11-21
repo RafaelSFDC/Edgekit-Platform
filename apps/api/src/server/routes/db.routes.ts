@@ -121,12 +121,27 @@ async function resolveTableAccessWithEngine(
 
 /**
  * Expande relacionamentos de forma declarativa e parametrizada (PocketBase / Supabase style)
+ * Blindado com RLS (resolveTableAccessWithEngine), bloqueio de _ek_* para não-admin e sanitização de colunas restritas.
  */
+const SENSITIVE_COLUMNS = new Set([
+  'password',
+  'key_hash',
+  'keyHash',
+  'secret',
+  'backup_codes',
+  'backupCodes',
+  'private_key',
+  'privateKey',
+  'token',
+  'impersonated_by',
+])
+
 async function expandRelations(
   db: AppDatabase,
   table: string,
   rows: any[],
   expandParam?: string | string[],
+  c?: Context<AppEnv>,
 ): Promise<any[]> {
   if (!rows || rows.length === 0 || !expandParam) return rows
 
@@ -135,6 +150,12 @@ async function expandRelations(
     : String(expandParam).split(',').map((s) => s.trim()).filter(Boolean)
 
   if (requested.length === 0) return rows
+
+  const isPlatformAdmin = Boolean(
+    c?.get('admin') ||
+    c?.get('apiKey')?.type === 'service_role' ||
+    c?.get('role') === 'service_role',
+  )
 
   let fkList: Array<{ table: string; from: string; to: string }> = []
   try {
@@ -167,14 +188,58 @@ async function expandRelations(
 
     if (!SAFE_IDENTIFIER.test(targetTable)) continue
 
+    const lowerTarget = targetTable.toLowerCase()
+
+    // 1. Bloqueio absoluto de tabelas de infraestrutura (_ek_*) e tabelas confidenciais de auth para não-admin
+    if (
+      lowerTarget.startsWith('_ek_') ||
+      lowerTarget === 'accounts' ||
+      lowerTarget === 'sessions' ||
+      lowerTarget === 'verifications' ||
+      lowerTarget === 'two_factors' ||
+      lowerTarget === 'passkeys' ||
+      lowerTarget === 'jwks'
+    ) {
+      if (!isPlatformAdmin) {
+        continue // Bloqueio total contra vazamento de dados internos
+      }
+    }
+
+    // 2. Para tabelas customizadas de negócio (não-sistema), valida políticas via Policy Engine
+    let targetWhereCondition: SQL | undefined = undefined
+    if (c && !isPlatformAdmin && lowerTarget !== 'users') {
+      try {
+        const targetAccess = await resolveTableAccessWithEngine(db, targetTable, c, 'select')
+        if (!targetAccess.allowed) continue
+        targetWhereCondition = targetAccess.whereCondition
+      } catch {
+        continue // Acesso negado pela política da tabela alvo
+      }
+    }
+
     const ids = Array.from(new Set(rows.map((r) => r[fromCol]).filter(Boolean)))
     if (ids.length === 0) continue
 
     try {
-      const relQuery = sql`SELECT * FROM ${sql.raw(`\`${targetTable}\``)} WHERE ${sql.raw(`\`${targetCol}\``)} IN (${sql.join(ids.map((id) => sql`${id}`), sql.raw(', '))})`
+      const whereConditions: SQL[] = [
+        sql`${sql.raw(`\`${targetCol}\``)} IN (${sql.join(ids.map((id) => sql`${id}`), sql.raw(', '))})`,
+      ]
+      if (targetWhereCondition) {
+        whereConditions.push(targetWhereCondition)
+      }
+
+      const relQuery = sql`SELECT * FROM ${sql.raw(`\`${targetTable}\``)} WHERE ${sql.join(whereConditions, sql.raw(' AND '))}`
       const relRows: any[] = await db.all(relQuery)
       const lookup = new Map<any, any>()
       for (const r of relRows) {
+        // Sanitização rigorosa de colunas restritas para chamadas não-admin
+        if (!isPlatformAdmin) {
+          for (const key of Object.keys(r)) {
+            if (SENSITIVE_COLUMNS.has(key)) {
+              delete r[key]
+            }
+          }
+        }
         lookup.set(String(r[targetCol]), r)
       }
 
@@ -459,7 +524,7 @@ dbRoutes.get('/:table', async (c) => {
     ])
 
     const total = countResult?.[0]?.total ?? rawRows.length
-    const rows = await expandRelations(db, table, rawRows, expandParam)
+    const rows = await expandRelations(db, table, rawRows, expandParam, c)
 
     if (body.single === true || c.req.query('single') === 'true') {
       if (rows.length === 0) {
@@ -709,7 +774,7 @@ dbRoutes.post('/:table/query', async (c) => {
     ])
 
     const total = countResult?.[0]?.total ?? rawRows.length
-    const rows = await expandRelations(db, table, rawRows, expandParam)
+    const rows = await expandRelations(db, table, rawRows, expandParam, c)
 
     if (body.single === true || c.req.query('single') === 'true') {
       if (rows.length === 0) {
@@ -772,7 +837,7 @@ dbRoutes.get('/:table/:id', async (c) => {
       )
     }
 
-    const rows = await expandRelations(db, table, rawRows, expandParam)
+    const rows = await expandRelations(db, table, rawRows, expandParam, c)
     return c.json({ success: true, data: rows[0] })
   } catch (err: any) {
     const isForbidden = err.message?.includes('Acesso negado') || err.message?.includes('Acesso restrito')

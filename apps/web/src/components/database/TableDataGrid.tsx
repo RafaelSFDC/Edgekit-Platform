@@ -13,6 +13,21 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableHead,
+  TableRow,
+  TableCell,
+} from '@/components/ui/table';
+import {
+  Empty,
+  EmptyHeader,
+  EmptyTitle,
+  EmptyDescription,
+  EmptyMedia,
+} from '@/components/ui/empty';
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -172,52 +187,56 @@ export const TableDataGrid: React.FC<TableDataGridProps> = ({
           </div>
         ) : filteredRows.length === 0 ? (
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-            <div className="size-10 rounded-full bg-muted/60 flex items-center justify-center text-muted-foreground mb-3">
-              <TableIcon className="size-5" />
-            </div>
-            <p className="text-sm font-medium text-foreground">
-              {rows.length === 0 ? 'Tabela vazia' : 'Nenhum resultado para a busca'}
-            </p>
-            <p className="text-xs text-muted-foreground mt-1 max-w-sm">
-              {rows.length === 0
-                ? `A tabela "${tableName}" não possui registros gravados ainda.`
-                : 'Tente alterar os termos de pesquisa ou limpe o campo.'}
-            </p>
-            {rows.length === 0 && !isSystemTable && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setIsAddOpen(true)}
-                className="mt-4 text-xs h-8 gap-1.5 cursor-pointer"
-              >
-                <Plus className="size-3.5" />
-                <span>Adicionar Primeiro Registro</span>
-              </Button>
-            )}
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <TableIcon className="size-4" />
+                </EmptyMedia>
+                <EmptyTitle>
+                  {rows.length === 0 ? 'Tabela vazia' : 'Nenhum resultado para a busca'}
+                </EmptyTitle>
+                <EmptyDescription>
+                  {rows.length === 0
+                    ? `A tabela "${tableName}" não possui registros gravados ainda.`
+                    : 'Tente alterar os termos de pesquisa ou limpe o campo.'}
+                </EmptyDescription>
+              </EmptyHeader>
+              {rows.length === 0 && !isSystemTable && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setIsAddOpen(true)}
+                  className="mt-2 text-xs h-8 gap-1.5 cursor-pointer"
+                >
+                  <Plus className="size-3.5" />
+                  <span>Adicionar Primeiro Registro</span>
+                </Button>
+              )}
+            </Empty>
           </div>
         ) : (
           <div className="flex-1 overflow-auto">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead className="bg-muted/60 sticky top-0 z-10 border-b border-border/70 backdrop-blur-xs">
-                <tr>
+            <Table className="text-xs border-collapse">
+              <TableHeader className="bg-muted/60 sticky top-0 z-10 border-b border-border/70 backdrop-blur-xs">
+                <TableRow>
                   {columns.map((col) => (
-                    <th
+                    <TableHead
                       key={col}
-                      className="px-3 py-2 text-[11px] font-semibold text-muted-foreground tracking-wider uppercase whitespace-nowrap"
+                      className="px-3 py-2 text-[11px] font-semibold text-muted-foreground tracking-wider uppercase whitespace-nowrap h-auto"
                     >
                       {col}
-                    </th>
+                    </TableHead>
                   ))}
-                  <th className="px-3 py-2 text-[11px] font-semibold text-muted-foreground tracking-wider uppercase text-right w-24">
+                  <TableHead className="px-3 py-2 text-[11px] font-semibold text-muted-foreground tracking-wider uppercase text-right w-24 h-auto">
                     Ações
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/50">
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody className="divide-y divide-border/50">
                 {filteredRows.map((row, rIdx) => {
                   const rowId = row.id !== undefined ? String(row.id) : null;
                   return (
-                    <tr
+                    <TableRow
                       key={rowId ?? rIdx}
                       className="hover:bg-muted/40 transition-colors group"
                     >
@@ -249,7 +268,7 @@ export const TableDataGrid: React.FC<TableDataGridProps> = ({
                           );
 
                         return (
-                          <td
+                          <TableCell
                             key={col}
                             onClick={() => handleCopyCell(val, cellKey)}
                             title="Clique para copiar conteúdo"
@@ -265,10 +284,10 @@ export const TableDataGrid: React.FC<TableDataGridProps> = ({
                                 )}
                               </span>
                             </div>
-                          </td>
+                          </TableCell>
                         );
                       })}
-                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                      <TableCell className="px-3 py-2 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                           {rowId && !isSystemTable && (
                             <>
@@ -293,12 +312,12 @@ export const TableDataGrid: React.FC<TableDataGridProps> = ({
                             </>
                           )}
                         </div>
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   );
                 })}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
         )}
 

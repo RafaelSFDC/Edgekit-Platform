@@ -2,6 +2,32 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { broadcastRealtime, STORAGE_KEY_ADMIN } from '../../services/api';
 import type { RealtimeMessage } from '../../types';
 
+export function getWebSocketBaseUrl(): string {
+  const apiBase =
+    (typeof import.meta !== 'undefined' && import.meta.env
+      ? (import.meta.env.VITE_API_BASE_URL as string | undefined)
+      : '') || '';
+
+  if (apiBase) {
+    try {
+      const url = new URL(apiBase, typeof window !== 'undefined' ? window.location.href : 'http://localhost');
+      const wsProtocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${wsProtocol}//${url.host}${url.pathname.replace(/\/$/, '')}`;
+    } catch {
+      if (apiBase.startsWith('https://')) {
+        return apiBase.replace(/^https:\/\//, 'wss://').replace(/\/$/, '');
+      }
+      if (apiBase.startsWith('http://')) {
+        return apiBase.replace(/^http:\/\//, 'ws://').replace(/\/$/, '');
+      }
+    }
+  }
+
+  const wsProtocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const host = typeof window !== 'undefined' ? window.location.host : 'localhost:5173';
+  return `${wsProtocol}//${host}`;
+}
+
 export function useRealtimeStream(channel = 'global') {
   const [messages, setMessages] = useState<RealtimeMessage[]>([]);
   const [status, setStatus] = useState<'connected' | 'connecting' | 'disconnected'>('disconnected');
@@ -25,9 +51,9 @@ export function useRealtimeStream(channel = 'global') {
     if (isUnmountedRef.current) return;
 
     setStatus('connecting');
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const apiKey = localStorage.getItem(STORAGE_KEY_ADMIN) || '';
-    const wsUrl = `${wsProtocol}//${window.location.host}/api/v1/realtime/${encodeURIComponent(
+    const wsBase = getWebSocketBaseUrl();
+    const apiKey = (typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_ADMIN) : null) || '';
+    const wsUrl = `${wsBase}/api/v1/realtime/${encodeURIComponent(
       channel
     )}/ws?apikey=${encodeURIComponent(apiKey)}&userName=AdminConsole`;
 

@@ -31,15 +31,28 @@ function BreadcrumbItem({ className, ...props }: React.ComponentProps<"li">) {
 
 function BreadcrumbLink({
   className,
-  asChild: _asChild,
+  asChild,
+  children,
   ...props
 }: React.ComponentProps<"a"> & { asChild?: boolean }) {
+  const linkClasses = cn("hover:text-foreground transition-colors cursor-pointer", className)
+
+  if (asChild && React.isValidElement(children)) {
+    return React.cloneElement(children as React.ReactElement<any>, {
+      "data-slot": "breadcrumb-link",
+      className: cn(linkClasses, (children.props as any)?.className),
+      ...props,
+    })
+  }
+
   return (
     <a
       data-slot="breadcrumb-link"
-      className={cn("hover:text-foreground transition-colors cursor-pointer", className)}
+      className={linkClasses}
       {...props}
-    />
+    >
+      {children}
+    </a>
   )
 }
 

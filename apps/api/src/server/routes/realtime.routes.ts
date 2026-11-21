@@ -11,14 +11,29 @@ async function handleWebSocketUpgrade(c: Context<AppEnv>, defaultChannel?: strin
   const upgradeHeader = c.req.header('Upgrade')
 
   if (upgradeHeader !== 'websocket') {
-    return c.text('Esperado cabeçalho Upgrade: websocket', 426)
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'UPGRADE_REQUIRED',
+          message: 'Esperado cabeçalho Upgrade: websocket',
+        },
+      },
+      426,
+    )
   }
 
   const user = c.get('user')
+  const role = c.get('role')
+  const isAdmin = Boolean(
+    c.get('admin') ||
+    c.get('apiKey')?.type === 'service_role' ||
+    role === 'service_role',
+  )
   const target = new URL(c.req.url)
 
   if (defaultChannel) {
-    if (defaultChannel.startsWith('_ek_') || defaultChannel.startsWith('db:')) {
+    if ((defaultChannel.startsWith('_ek_') || defaultChannel.startsWith('db:')) && !isAdmin) {
       return c.json(
         {
           success: false,
@@ -32,6 +47,8 @@ async function handleWebSocketUpgrade(c: Context<AppEnv>, defaultChannel?: strin
     }
     target.searchParams.set('channel', defaultChannel)
   }
+
+  target.searchParams.set('isAdmin', isAdmin ? 'true' : 'false')
 
   // Zero-Trust: Identidade de presença é derivada exclusivamente do token autenticado
   if (user) {

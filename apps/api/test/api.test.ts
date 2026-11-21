@@ -1105,6 +1105,31 @@ describe('Edgekit Platform — Fundação, Segurança & Identidade Dupla (Fase 1
         ws.sentMessages.some((m) => m.includes('FORBIDDEN_BROADCAST')),
       ).toBe(true)
     })
+
+    it('CDC Subscription Protection: DO rejeita subscrição de clientes não-admin em canais db:*', async () => {
+      const { RealtimeDurableObject } = await import('../src/server/realtime/durable-object')
+      const mockState = new MockDurableObjectState()
+      const doInstance = new RealtimeDurableObject(mockState as any, {})
+
+      const ws = new MockWebSocket()
+      ws.serializeAttachment({
+        userId: 'untrusted_user',
+        userName: 'Viewer',
+        channels: [],
+        connectedAt: Date.now(),
+        isAdmin: false,
+      })
+      mockState.acceptWebSocket(ws, [])
+
+      await doInstance.webSocketMessage(
+        ws as any,
+        JSON.stringify({ action: 'subscribe', channel: 'db:tasks' }),
+      )
+
+      expect(
+        ws.sentMessages.some((m) => m.includes('FORBIDDEN_CHANNEL') && m.includes('db:*')),
+      ).toBe(true)
+    })
   })
 
   describe('Mutações Atômicas Transacionais em Lote (POST /api/v1/db/batch)', () => {
@@ -1542,6 +1567,26 @@ describe('Edgekit Platform — Fundação, Segurança & Identidade Dupla (Fase 1
       expect(broadcastRes.status).toBe(403)
       const broadcastJson: any = await broadcastRes.json()
       expect(broadcastJson.error.code).toBe('FORBIDDEN_CHANNEL')
+    })
+
+    it('Fase 1 Security: POST /api/v1/admin/seed-demo foi removido e retorna 404', async () => {
+      const res = await app.request('/api/v1/admin/seed-demo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reset: true }),
+      })
+      expect(res.status).toBe(404)
+    })
+
+    it('Fase 1 Security: expandRelations bloqueia tentativa de expandir tabelas internas _ek_* para não-admin', async () => {
+      const res = await app.request('/api/v1/db/post_reviews?expand=user_id:_ek_admins', {
+        headers: { apikey: anonKey },
+      })
+      expect(res.status).toBe(200)
+      const json: any = await res.json()
+      const item = json.data.find((d: any) => d.id === 'review-1')
+      expect(item.user_id_data).toBeUndefined()
+      expect(item.expand?.user_id).toBeUndefined()
     })
 
     it('Client SDK: .expand() e .query() operam com tipagem e sem SQL Injection', async () => {
